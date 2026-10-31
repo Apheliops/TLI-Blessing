@@ -56,7 +56,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "5.5"
+APP_VERSION = "5.6"
 
 # Başlangıç fiyatları (28.10.2026 log'undan). Exchange'te aratınca güncel fiyatla değişir.
 SEED_PRICES = {"5028": {"prices": [0.086957, 0.097015, 0.09902, 0.1, 0.1], "ts": 1793213507},
@@ -1302,18 +1302,24 @@ def run_gui(start_hidden=False):
     ov_body_outer = tk.Frame(ov, bg=OBG)
     ov_body_outer.pack(fill="both", expand=True, padx=(6, 2), pady=4)
     ov_canvas = tk.Canvas(ov_body_outer, bg=OBG, highlightthickness=0, bd=0, yscrollincrement=20)
-    ov_sb = tk.Scrollbar(ov_body_outer, orient="vertical", command=ov_canvas.yview, width=10)
+    # ttk kaydırma çubuğu: Windows'un yerleşik çubuğu yeniden boyutlandırmada bazen kendini çizmiyordu
+    style.configure("Ov.Vertical.TScrollbar", background="#6b7280", troughcolor="#1e2128", bordercolor="#1e2128",
+                    lightcolor="#6b7280", darkcolor="#6b7280", arrowcolor=FG, arrowsize=11, gripcount=0)
+    style.map("Ov.Vertical.TScrollbar", background=[("active", "#8b93a1")])
+    ov_sb = ttk.Scrollbar(ov_body_outer, orient="vertical", command=ov_canvas.yview, style="Ov.Vertical.TScrollbar")
     ov_canvas.configure(yscrollcommand=ov_sb.set)
     ov_canvas.pack(side="left", fill="both", expand=True)
     ov_body = tk.Frame(ov_canvas, bg=OBG)
     ov_body_id = ov_canvas.create_window(0, 0, window=ov_body, anchor="nw")
 
     def _ov_sync(_e=None):
+        ov_body.update_idletasks()          # yazılar yeniden kırıldıysa güncel yüksekliği al
         ov_canvas.configure(scrollregion=ov_canvas.bbox("all"))
         need = ov_body.winfo_reqheight() > ov_canvas.winfo_height() + 2
-        if need and not ov_sb.winfo_ismapped():
+        packed = ov_sb.winfo_manager() == "pack"   # haritalanmayı beklese de yerleştirilmiş say
+        if need and not packed:
             ov_sb.pack(side="right", fill="y")
-        elif not need and ov_sb.winfo_ismapped():
+        elif not need and packed:
             ov_sb.pack_forget()
             ov_canvas.yview_moveto(0)
 
@@ -1328,7 +1334,30 @@ def run_gui(start_hidden=False):
             _bind_wheel(c)
 
     ov_body.bind("<Configure>", _ov_sync)
-    ov_canvas.bind("<Configure>", lambda e: (ov_canvas.itemconfig(ov_body_id, width=e.width), _ov_sync()))
+    def _rewrap(body, width):
+        """Panel boyutu değişince yazıların kırılma genişliğini yeni genişliğe uydur
+        (yoksa açılışta dar sütuna kırılır, büyütünce sağdan taşar)."""
+        wl = max(120, width - 14)
+
+        def walk(w):
+            for c in w.winfo_children():
+                if isinstance(c, tk.Label) and int(c.cget("wraplength") or 0) > 0:
+                    c.config(wraplength=wl)
+                walk(c)
+        walk(body)
+
+    def _ov_width():
+        """Panelin genişliği; panel henüz gizliyken (açılışta) kayıtlı boyuttan."""
+        w = ov.winfo_width()
+        if w > 50:
+            return w
+        try:
+            return int(str(data["settings"].get("overlay_geom", "300x")).split("x")[0])
+        except ValueError:
+            return 300
+
+    ov_canvas.bind("<Configure>", lambda e: (ov_canvas.itemconfig(ov_body_id, width=e.width),
+                                             _rewrap(ov_body, e.width), _ov_sync(), ov.after(60, _ov_sync)))
     _bind_wheel(ov_body_outer)
 
     # Void Sea sekmesinin gövdesi (sekme seçilince ov_body_outer'ın yerine geçer)
@@ -1336,18 +1365,20 @@ def run_gui(start_hidden=False):
     vs_outer = tk.Frame(ov, bg=OBG)
     # width/height=1: tuval varsayılan boyutuyla kaydırma çubuğunun yerini kapmasın
     vs_canvas = tk.Canvas(vs_outer, bg=OBG, highlightthickness=0, bd=0, yscrollincrement=20, width=1, height=1)
-    vs_sb = tk.Scrollbar(vs_outer, orient="vertical", command=vs_canvas.yview, width=10)
+    vs_sb = ttk.Scrollbar(vs_outer, orient="vertical", command=vs_canvas.yview, style="Ov.Vertical.TScrollbar")
     vs_canvas.configure(yscrollcommand=vs_sb.set)
     vs_canvas.pack(side="left", fill="both", expand=True)
     vs_body = tk.Frame(vs_canvas, bg=OBG)
     vs_body_id = vs_canvas.create_window(0, 0, window=vs_body, anchor="nw")
 
     def _vs_sync(_e=None):
+        vs_body.update_idletasks()          # yazılar yeniden kırıldıysa güncel yüksekliği al
         vs_canvas.configure(scrollregion=vs_canvas.bbox("all"))
         need = vs_body.winfo_reqheight() > vs_canvas.winfo_height() + 2
-        if need and not vs_sb.winfo_ismapped():
+        packed = vs_sb.winfo_manager() == "pack"   # haritalanmayı beklese de yerleştirilmiş say
+        if need and not packed:
             vs_sb.pack(side="right", fill="y", before=vs_canvas)
-        elif not need and vs_sb.winfo_ismapped():
+        elif not need and packed:
             vs_sb.pack_forget()
             vs_canvas.yview_moveto(0)
 
@@ -1362,7 +1393,8 @@ def run_gui(start_hidden=False):
             _vs_bind_wheel(c)
 
     vs_body.bind("<Configure>", _vs_sync)
-    vs_canvas.bind("<Configure>", lambda e: (vs_canvas.itemconfig(vs_body_id, width=e.width), _vs_sync()))
+    vs_canvas.bind("<Configure>", lambda e: (vs_canvas.itemconfig(vs_body_id, width=e.width),
+                                             _rewrap(vs_body, e.width), _vs_sync(), ov.after(60, _vs_sync)))
     _vs_bind_wheel(vs_outer)
     ov_state_tab = {"tab": data["settings"].get("overlay_tab", "bl")}
 
@@ -1483,7 +1515,7 @@ def run_gui(start_hidden=False):
             lines = []
         for txt_, col in lines:
             tk.Label(ov_body, text=txt_, bg=OBG, fg=col, font=("Segoe UI", 8), anchor="w", justify="left",
-                     wraplength=max(120, ov.winfo_width() - 40)).pack(fill="x")
+                     wraplength=max(120, _ov_width() - 40)).pack(fill="x")
         if goods:
             # en kârlı en üstte
             def profit_of(o):
@@ -1738,7 +1770,7 @@ def run_gui(start_hidden=False):
     def render_vs():
         for w in vs_body.winfo_children():
             w.destroy()
-        wrap = max(120, ov.winfo_width() - 30)
+        wrap = max(120, _ov_width() - 30)
         best, gains = vs.advice(data["settings"])
         n = len(vs.cards)
         pos = VS.POS_NAME.get(n, [str(i + 1) for i in range(n)])
