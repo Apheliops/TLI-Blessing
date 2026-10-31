@@ -13,7 +13,7 @@ The app only **reads the game's log file and takes screenshots**. It does not re
 
 - Windows 10 / 11
 - [Python 3.9+](https://www.python.org/downloads/) — tick **"Add python.exe to PATH"** during setup
-- Game language: **English** (the screen reader expects English text)
+- Game language: **English** for now (the screen reader expects English text). Other languages are planned — if you play in another language, opening a [GitHub issue](https://github.com/Apheliops/TLI-Blessing/issues) with screenshots of the Blessings and Void Sea Seal / Terminal screens helps add support.
 - Screen: 16:9, tested at **2560×1440** and **1920×1080** (other resolutions are scaled automatically; below 1080p reading gets less reliable)
 - Fullscreen, borderless and **windowed** mode all work — the app finds the game window and reads only that
 
