@@ -111,7 +111,7 @@ After **5 recorded runs** the advice is tuned to your own data:
 
 ### What to expect
 
-- **It does not guarantee red memories**, from the start or later on. The goal is that, once it has collected enough data, the number and the rarity of the Hero Memories you get go up.
+- **It does not guarantee red memories**, from the start or later on. The goal is that, once it has collected enough data, it increases the odds of getting more Hero Memories, and rarer ones.
 - **All of its data is collected locally, only from you.** Nothing is shared with or taken from other players — so how well it learns depends entirely on your own data (see below).
 
 ### ⚠ Your data must be consistent
