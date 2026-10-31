@@ -389,7 +389,12 @@ def read_selected_tier(lines, width):
     """Seçili alevin garanti ettiği en düşük kademe ("of Magic quality or higher")."""
     main = " ".join(t for t, x, y in lines if x < width * 0.80)
     m = QUAL_RX.search(main)
-    return TIER_NAMES.index(m.group(1).capitalize()) if m else None
+    if m:
+        return TIER_NAMES.index(m.group(1).capitalize())
+    # mavi alev: "a Whisper of Armament is guaranteed…" — kalite yazmaz, sadece tür garanti
+    if re.search(r"whisper[\W_]*of[\W_]*\w+[\W_]*is[\W_]*guarant", main, re.I):
+        return 0
+    return None
 
 
 def read_selected_flame(img, lines):
@@ -558,14 +563,40 @@ def analyze(img):
            "owned_n": owned_n, "selected": read_selected_flame(img, lines) if flame else None, "tiers": {}}
     if flame:
         try:
-            res["tiers"] = {side: FLAME_COLOR_TIER[c] for side, c in read_flame_colors(img).items()}
+            cols = read_flame_colors(img)
         except Exception:
-            pass
-        # seçili alevin yazısı rengi doğrular (renk okunamadıysa yerine geçer)
-        sel_tier = read_selected_tier(lines, img.width)
-        if res["selected"] in ("arm", "won") and sel_tier is not None:
-            res["tiers"][res["selected"]] = sel_tier
+            cols = {}
+        res["tiers"] = flame_tiers(cols, res["selected"], read_selected_tier(lines, img.width))
     return res
+
+
+def flame_tiers(cols, selected, sel_tier):
+    """Alevlerin garanti kademesi {tür: kademe}. Seçili alevin türü ve kademesi yazıdan; köşesi, rengi
+    ortadaki daireyle eşleşen köşe. Diğer köşe diğer türdür, kademesi kendi renginden."""
+    tier = lambda c: FLAME_COLOR_TIER.get(c) if c else None
+    left, right, center = cols.get("left"), cols.get("right"), cols.get("center")
+    out = {}
+    if selected not in ("arm", "won"):
+        # seçili alev yazıdan okunamadı: eski varsayım (sol Armament, sağ Wonder)
+        for side, c in (("arm", left), ("won", right)):
+            if tier(c) is not None:
+                out[side] = tier(c)
+        return out
+    other = "won" if selected == "arm" else "arm"
+    if left == right:
+        sel_c = oth_c = left                                 # iki alev aynı renk: köşe fark etmez
+    elif center == left:
+        sel_c, oth_c = left, right
+    elif center == right:
+        sel_c, oth_c = right, left
+    else:
+        sel_c = oth_c = None                                 # hangi köşenin seçili olduğu anlaşılamadı
+    t = sel_tier if sel_tier is not None else tier(sel_c)
+    if t is not None:
+        out[selected] = t
+    if tier(oth_c) is not None:
+        out[other] = tier(oth_c)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -616,18 +647,20 @@ def flame_advice(picked, s, tiers=None):
 
 
 def read_flame_colors(img):
-    """Üst-soldaki (Armament) ve üst-sağdaki (Wonder) alevin rengi -> {tür: "blue"|"purple"|"yellow"}.
-    Sahne ekranın ortasına, yüksekliğe göre ölçekli çiziliyor."""
+    """Üst-sol, üst-sağ alevin ve ortadaki dairenin (seçili alev) rengi ->
+    {"left"|"right"|"center": "blue"|"purple"|"yellow"}. Hangi köşenin Armament, hangisinin Wonder
+    olduğu oturumdan oturuma değişiyor; tür, seçili alevin yazısından ve ortadaki rengin eşleştiği
+    köşeden çıkarılır (analyze). Sahne ekranın ortasına, yüksekliğe göre ölçekli çiziliyor."""
     import numpy as np
     W, H = img.size
     out = {}
-    for side, dx in (("arm", -0.231), ("won", 0.233)):
-        cx, cy, r = W / 2 + dx * H, 0.305 * H, 0.04 * H
+    for side, dx, dy, rr in (("left", -0.231, 0.305, 0.04), ("right", 0.233, 0.305, 0.04), ("center", 0.0, 0.498, 0.035)):
+        cx, cy, r = W / 2 + dx * H, dy * H, rr * H
         a = np.asarray(img.crop((int(cx - r), int(cy - r), int(cx + r), int(cy + r))).convert("RGB")).astype(float)
         a = a.reshape(-1, 3) / 255
         mx, mn = a.max(1), a.min(1)
         keep = (mx > 0.6) & ((mx - mn) / np.maximum(mx, 1e-6) > 0.35)     # parlak ve renkli (arka plan koyu)
-        if keep.sum() < 50:
+        if keep.sum() < 30:
             continue
         r_, g_, b_ = a[keep].T
         d = np.maximum(mx[keep] - mn[keep], 1e-6)
