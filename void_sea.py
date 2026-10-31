@@ -1052,8 +1052,17 @@ class RunLog:
                 self.save()
             self.refit()
 
-    def on_memory(self):
+    def on_memory(self, uid=None):
+        """Çantaya bir Hero Memory girdi. Her eşya kendi kimliğiyle bir kez sayılır: çantada "Sort"
+        (ResetItemsLayout) ya da taşıma aynı memory'leri log'a yeniden "Add" diye yazıyor."""
         if self.active and self.runs:
+            seen = getattr(self, "_mem_ids", None)
+            if uid:
+                if seen is None or seen[0] is not self.runs[-1]:
+                    seen = self._mem_ids = (self.runs[-1], set())
+                if uid in seen[1]:
+                    return
+                seen[1].add(uid)
             self.runs[-1]["memories"] += 1
             self.save()
 
@@ -1123,7 +1132,7 @@ OPEN_RX = re.compile(r"OpenView (VoidBeacon|VoidPort)\s*$")
 # sayfa kapandı: "PageBase@ BackFlow0! Switch = true 15414_VoidBeaconCtrl 1260244"
 CLOSE_RX = re.compile(r"BackFlow0!.*\d+_(VoidBeacon|VoidPort)Ctrl")
 # Hero Memory türleri: 71001 Origin, 71002 Discipline, 71003 Progress (kalite log'da yok)
-MEM_RX = re.compile(r"ItemChange@ Add Id=(7100[123])_")
+MEM_RX = re.compile(r"ItemChange@ Add Id=(7100[123]_\S+)")      # tür + eşyanın tekil kimliği
 
 
 def is_void_sea_block(effs):

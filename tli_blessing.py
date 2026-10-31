@@ -56,7 +56,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "5.6"
+APP_VERSION = "5.7"
 
 # Başlangıç fiyatları (28.10.2026 log'undan). Exchange'te aratınca güncel fiyatla değişir.
 SEED_PRICES = {"5028": {"prices": [0.086957, 0.097015, 0.09902, 0.1, 0.1], "ts": 1793213507},
@@ -252,6 +252,8 @@ RX_XRECV = re.compile(r"RecvMessage STT----XchgSearchPrice----SynId = (\d+)")
 RX_REFER = re.compile(r"\+refer \[([^\]]*)\]")
 RX_PRICE = re.compile(r"\+\d+ \[([0-9.eE+-]+)\]\s*$")
 RX_CUR = re.compile(r"\+currency \[(\d+)\]")
+RX_FUNC = re.compile(r"CheckFuncDownloaded FuncId = (\d+)")
+BLESSINGS_FUNC = "2003"     # oyunun "Blessings from Gods" özelliğinin numarası
 
 
 def ts_of(line):
@@ -278,6 +280,8 @@ class Parser:
         self.block = None        # ("send"/"recv", syn, lines)
         self.pending_search = {}  # syn -> cid
         self.last_ts = None
+        self.last_func = None    # son açılan oyun özelliğinin numarası (CheckFuncDownloaded FuncId)
+        self.in_blessings = False
 
     def reset(self):
         self.__init__(self.emit)
@@ -325,8 +329,15 @@ class Parser:
             return
 
         # --- Blessings ekranı açıldı ---
+        # Blessings ile diğer dükkânlar (Sandlord'daki Resource Trade House vb.) aynı GroceryStoreV3 sayfasını
+        # kullanıyor; açılmadan hemen önce yazılan özellik numarası ayırt ediyor: Blessings = 2003.
+        m = RX_FUNC.search(line)
+        if m:
+            self.last_func = m.group(1)
         if "GroceryStoreV3 Run" in line:
-            self.emit("shop", {"ts": self.last_ts or time.time(), "why": "open"})
+            self.in_blessings = self.last_func in (None, BLESSINGS_FUNC)
+            if self.in_blessings:
+                self.emit("shop", {"ts": self.last_ts or time.time(), "why": "open"})
             return
 
         # --- Envanter değişimleri ---
@@ -386,6 +397,8 @@ class Parser:
             else:
                 self.emit("buy", {"ts": ts, "cid": None, "qty": 0, "ds": spent})
         elif name == "RefreshVendorShop":
+            if not self.in_blessings:          # başka bir dükkânın yenilemesi
+                return
             spent = -sum(d for c, d in changes if c == DS and d is not None and d < 0)
             self.emit("refresh", {"ts": ts, "ds": spent})
             self.emit("shop", {"ts": ts, "why": "refresh"})
@@ -1756,7 +1769,7 @@ def run_gui(start_hidden=False):
             vs_log.on_level()
             return                           # her bölge değişiminde paneli yeniden çizmeye gerek yok
         elif ev == "memory":
-            vs_log.on_memory()
+            vs_log.on_memory(val)
         render_vs()
 
     def vs_take(i):
