@@ -1,0 +1,34 @@
+==============================================================================
+   READ BEFORE UPDATING  -  NEVER DELETE THE "userdata" FOLDER
+==============================================================================
+
+The "userdata" folder (next to Start.bat) holds ALL your data:
+
+  * voidsea_runs.json + voidsea_runs.backup.json
+        your Void Sea run log - the learning depends on it,
+        and it CANNOT be recovered if you delete it
+  * tli_blessing_data.json
+        your settings and learned prices
+
+(The "userdata" folder appears after the first start of the app.)
+
+Release zips NEVER contain "userdata", so an update never overwrites it.
+But you lose it if you delete it.
+
+HOW TO UPDATE
+  [OK]  Extract the new zip OVER the old folder (into the same place, so the
+        "TLI-Blessing" folders merge). Replace the files when Windows asks.
+
+  [NO]  Do NOT delete the old folder before updating
+        -> "userdata" is deleted with it.
+
+  [NO]  Do NOT extract into a different folder
+        -> the app starts empty there. Your data is still in the old folder:
+           copy "userdata" into the new folder.
+
+  [NO]  Do NOT extract INSIDE the old folder
+        -> you get "TLI-Blessing\TLI-Blessing" and the app starts empty.
+
+TIP: back up "userdata" from time to time - just copy the folder somewhere safe.
+
+You only need to run Setup.bat again if the release notes say so.

@@ -1,5 +1,20 @@
 # TLI Blessing Helper
 
+> [!CAUTION]
+> ## ⚠ UPDATING? NEVER DELETE THE `userdata` FOLDER
+>
+> The **`userdata`** folder (next to `Start.bat`) holds **ALL your data**:
+> - **`voidsea_runs.json`** and **`voidsea_runs.backup.json`** — your Void Sea run log (the learning depends on it and it **cannot be recovered**)
+> - `tli_blessing_data.json` — your settings and learned prices
+>
+> Release zips **never contain** `userdata`, so an update never overwrites it — but you lose it if you delete it.
+>
+> - ✅ **DO** extract the new zip **over the old folder** (into the same place, so the `TLI-Blessing` folders merge).
+> - ❌ **DON'T delete the old folder** before updating — `userdata` is deleted with it.
+> - ❌ **DON'T extract into a different folder** — the app starts empty there. Your data is still in the old folder: copy `userdata` over.
+> - ❌ **DON'T extract inside the old folder** — you get `TLI-Blessing\TLI-Blessing` and the app starts empty.
+> - 💾 **Back up `userdata` from time to time** — just copy the folder somewhere safe.
+
 A small Windows companion app for **Torchlight: Infinite** with a transparent in-game overlay.
 
 - **DS Calculator** — reads the *Blessings from Gods* offers on your screen and tells you which ones are worth buying with Divinity Stones (DS).
@@ -20,7 +35,7 @@ The app only **reads the game's log file and takes screenshots**. It does not re
 ## Installation
 
 1. Download the latest **`TLI-Blessing-vX.Y.zip`** from the [Releases](https://github.com/Apheliops/TLI-Blessing/releases/latest) page and extract it anywhere, e.g. `C:\TLI-Blessing`.
-   When updating, extract the new version over the old folder — your data in `userdata` is kept.
+   **Updating?** Read the warning at the top first — extract over the old folder and never delete `userdata`.
 2. Double-click **`Setup.bat`**. It installs the Python packages (`requirements.txt`) and Tesseract-OCR.
 3. Turn the game log on (see below).
 4. Double-click **`Start.bat`**.
