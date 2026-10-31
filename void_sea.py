@@ -591,7 +591,12 @@ def flame_tiers(cols, selected, sel_tier):
     other = "won" if selected == "arm" else "arm"
     if left == right:
         sel_c = oth_c = left                                 # iki alev aynı renk: köşe fark etmez
-    elif center == left:
+    elif sel_tier is not None and tier(left) == sel_tier and tier(right) != sel_tier:
+        sel_c, oth_c = left, right                           # yazıdaki kalite sol köşenin rengine uyuyor
+    elif sel_tier is not None and tier(right) == sel_tier and tier(left) != sel_tier:
+        sel_c, oth_c = right, left
+    elif center == left:                                     # yazıdan anlaşılamadı: ortadaki dairenin rengi
+                                                             # (sarı seçiliyken sönük, okunamayabiliyor)
         sel_c, oth_c = left, right
     elif center == right:
         sel_c, oth_c = right, left

@@ -176,6 +176,16 @@ When moving the app to another folder, copy `userdata` too.
 
 ---
 
+## Contributors
+
+Thanks to everyone who helped make this tool better:
+
+- **LordZ3us97** — tested it on a 2560×1080 ultrawide screen and sent the screenshots that made 21:9 support possible ([#1](https://github.com/Apheliops/TLI-Blessing/issues/1)).
+
+Found a bug or play in another language or resolution? [Open an issue](https://github.com/Apheliops/TLI-Blessing/issues/new/choose) — every report helps.
+
+---
+
 ## License
 
 Copyright © 2026 Apheliops
