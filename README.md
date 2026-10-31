@@ -18,7 +18,8 @@ The app only **reads the game's log file and takes screenshots**. It does not re
 
 ## Installation
 
-1. Download this repository (**Code → Download ZIP**) and extract it anywhere, e.g. `C:\TLI_Blessing_Helper`.
+1. Download the latest **`TLI-Blessing-vX.Y.zip`** from the [Releases](https://github.com/Apheliops/TLI-Blessing/releases/latest) page and extract it anywhere, e.g. `C:\TLI-Blessing`.
+   When updating, extract the new version over the old folder — your data in `userdata` is kept.
 2. Double-click **`Setup.bat`**. It installs the Python packages (`requirements.txt`) and Tesseract-OCR.
 3. Turn the game log on (see below).
 4. Double-click **`Start.bat`**.
