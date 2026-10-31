@@ -9,7 +9,14 @@
 >
 > Release zips **never contain** `userdata`, so an update never overwrites it — but you lose it if you delete it.
 >
-> - ✅ **DO** extract the new zip **over the old folder** (into the same place, so the `TLI-Blessing` folders merge).
+> **How to update (Windows "Extract All"):**
+> 1. **Close the app** (✕ on the overlay, *Quit app*, or right-click the tray icon → *Quit*).
+> 2. Download the new `TLI-Blessing-vX.Y.zip` from Releases.
+> 3. Right-click the zip → **Extract All…**
+> 4. **Change the destination** to the folder that *contains* your app folder — e.g. if the app is in `C:\TLI-Blessing`, extract to `C:\`. (Windows suggests a new folder in *Downloads* — **don't accept that**.)
+> 5. When Windows asks *"Replace or Skip Files"*, choose **Replace the files in the destination**. This only replaces program files — `userdata` is not in the zip, so it is never touched. (*Skip* keeps the old version; *Let me decide* can mix versions.)
+> 6. Start the app with **`Start.bat`** — the version at the bottom of the overlay should be the new one. Run `Setup.bat` again only if the release notes say so.
+>
 > - ❌ **DON'T delete the old folder** before updating — `userdata` is deleted with it.
 > - ❌ **DON'T extract into a different folder** — the app starts empty there. Your data is still in the old folder: copy `userdata` over.
 > - ❌ **DON'T extract inside the old folder** — you get `TLI-Blessing\TLI-Blessing` and the app starts empty.
