@@ -164,8 +164,6 @@ Everything personal is stored in the `userdata` folder next to the app — it st
 | `last_scan*.png`, `error_log.txt` | last failed screen read and error log, for troubleshooting |
 | `icon.png` | app icon, downloaded once from tlidb |
 
-Older versions used Turkish file names (`voidsea_kayit.json` …); they are renamed automatically on the first start — nothing is lost.
-
 When moving the app to another folder, copy `userdata` too.
 
 ## Troubleshooting
