@@ -22,6 +22,7 @@ N_CARDS = 8
 # Blessings'te görülen eşyalar -> ID (isim okununca eşleştirme için)
 KNOWN = [
     (("flame", "elementium"), FE),
+    (("flame", "ementi"), FE),          # "Flame Flementium" gibi okunuşlar
     (("flame", "sand"), "100200"),
     (("energy", "core"), "5080"),
     (("netherrealm",), "5028"),
@@ -72,17 +73,63 @@ def setup(tesseract_path=""):
     return exe
 
 
+def game_window_rect():
+    """Oyun penceresinin iç alanı (başlık çubuğu ve kenarlar hariç), ekran koordinatlarında:
+    {"left", "top", "width", "height"}; bulunamazsa ya da simge durumundaysa None.
+    Oyun pencere modunda (ör. 2560×1440 monitörde 1920×1080) çalışıyorsa sadece o alan okunmalı."""
+    import sys
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+    found = []
+
+    def exe_of(hwnd):
+        pid = wintypes.DWORD()
+        u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        h = k32.OpenProcess(0x1000, False, pid.value)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ""
+        try:
+            size = wintypes.DWORD(1024)
+            buf = ctypes.create_unicode_buffer(1024)
+            return buf.value.lower() if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)) else ""
+        finally:
+            k32.CloseHandle(h)
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _):
+        if u32.IsWindowVisible(hwnd) and not u32.IsIconic(hwnd) and "torchlight" in exe_of(hwnd):
+            r = wintypes.RECT()
+            if u32.GetClientRect(hwnd, ctypes.byref(r)) and r.right > 640 and r.bottom > 360:
+                pt = wintypes.POINT(0, 0)
+                u32.ClientToScreen(hwnd, ctypes.byref(pt))
+                found.append({"left": pt.x, "top": pt.y, "width": r.right, "height": r.bottom})
+        return True
+
+    try:
+        u32.EnumWindows(cb, 0)
+    except Exception:
+        return None
+    return max(found, key=lambda r: r["width"] * r["height"]) if found else None
+
+
 def grab_screen(monitor_index=1):
+    """Oyun penceresini yakalar (pencere modu, kenarlıksız, tam ekran); bulunamazsa seçili monitörün tamamını."""
     try:
         import mss
         from PIL import Image
     except ImportError as e:
         raise OcrError(f"Missing package: {e.name}. Run 'Setup.bat'.")
     with mss.mss() as sct:
-        mons = sct.monitors
-        if monitor_index >= len(mons):
-            monitor_index = 1
-        shot = sct.grab(mons[monitor_index])
+        area = game_window_rect()
+        if area is None:
+            mons = sct.monitors
+            if monitor_index >= len(mons):
+                monitor_index = 1
+            area = mons[monitor_index]
+        shot = sct.grab(area)
         return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
 
 
@@ -193,9 +240,20 @@ def learn_price(glyphs, value):
 
 
 def _read_price(im, cx, s, np, Image, pytesseract):
-    """-> (fiyat ya da None, rakam vektörleri, neden)"""
+    """-> (fiyat ya da None, rakam vektörleri, neden). Okunamazsa daha gevşek beyaz eşikle tekrar dener
+    (renkli kart zemini / düşük çözünürlükte rakam kenarları beyazdan sapıyor)."""
+    first = None
+    for lo, sp in ((150, 80), (140, 100), (130, 120)):
+        r = _read_price_once(im, cx, s, np, Image, pytesseract, lo, sp)
+        if r[0] is not None:
+            return r
+        first = first or r
+    return first
+
+
+def _read_price_once(im, cx, s, np, Image, pytesseract, lo, spread):
     reg = np.asarray(im.crop((int(cx - 6 * s), int(312 * s), int(cx + 62 * s), int(385 * s))))
-    m = _white(reg, np)
+    m = _white(reg, np, lo, spread)
     rows = m.sum(1)
     if rows.max() < 2:
         return None, [], "price text not visible (card covered or screen moving)"
@@ -260,9 +318,13 @@ def _sold_out(im, cx, s, np):
     return red > 60 * s * s
 
 
-def _read_name(im, cx, s, np, Image, pytesseract):
+# isim yazısının beyaz eşikleri: önce sıkı; eşya tanınmazsa (renkli kart zemini, düşük çözünürlük) gevşet
+NAME_THRESHOLDS = ((165, 70), (150, 90), (140, 110))
+
+
+def _read_name(im, cx, s, np, Image, pytesseract, lo=165, spread=70):
     a = np.asarray(im.crop((int(cx - 74 * s), int(232 * s), int(cx + 74 * s), int(325 * s))))
-    img = _to_img(_white(a, np, 165, 70), np, Image, 3, pad=4)
+    img = _to_img(_white(a, np, lo, spread), np, Image, 3, pad=4)
     return pytesseract.image_to_string(img, config="--psm 6").replace("\n", " ").strip()
 
 
@@ -317,6 +379,11 @@ def read_offers(im, item_names=None):
     Dönen: [{"slot","text","cid","qty","price","sold","excluded"}]"""
     np, Image, pytesseract = _imports()
     W, H = im.size
+    if H < 1400:
+        # 1080p gibi düşük çözünürlükte beyaz yazı piksel piksel ayrılınca rakamlar bozuluyor:
+        # önce yumuşak büyütüp 1440p boyutunda oku (rakam şablonları da bu boyuttan)
+        im = im.resize((round(W * 1440 / H), 1440), Image.LANCZOS)
+        W, H = im.size
     s = H / 1440.0
     # 16:9'dan geniş ekranlarda arayüz ortalanır
     x_off = (W - 2560 * s) / 2 if W / H > 16 / 9 + 0.01 else 0
@@ -327,7 +394,18 @@ def read_offers(im, item_names=None):
         rec = {"slot": i + 1, "text": "", "cid": None, "qty": 1, "price": None, "sold": sold, "excluded": False,
                "price_why": "", "problem": ""}
         if not sold:
-            rec["text"] = _read_name(im, cx, s, np, Image, pytesseract)
+            # eşya tanınana kadar (ve adet "x20" gibi okunana kadar) gevşek eşikleri de dene
+            best = None
+            for lo, sp in NAME_THRESHOLDS:
+                txt = _read_name(im, cx, s, np, Image, pytesseract, lo, sp)
+                got = match_item(txt, item_names)
+                has_qty = bool(re.search(r"x\s?\d", txt.lower()))
+                if best is None or (got[0] or got[2]) and not (best[1][0] or best[1][2]):
+                    best = (txt, got)
+                if (got[0] or got[2]) and has_qty:
+                    best = (txt, got)
+                    break
+            rec["text"] = best[0]
             try:  # kartın ikonu (küçük panelde göstermek için): yenileme animasyonunda kart kayabildiği
                 #     için kesit, kartın bulunan üst kenarına göre alınır
                 top = _card_top(im, cx, s, np)
@@ -335,7 +413,7 @@ def read_offers(im, item_names=None):
                                        int(top + 144 * s))).resize((40, 40), Image.LANCZOS)
             except Exception:
                 rec["icon"] = None
-            rec["cid"], rec["qty"], rec["excluded"] = match_item(rec["text"], item_names)
+            rec["cid"], rec["qty"], rec["excluded"] = best[1]
             if not rec["excluded"]:
                 rec["price"], rec["glyphs"], rec["price_why"] = _read_price(im, cx, s, np, Image, pytesseract)
                 rec["price_img"] = im.crop((int(cx - 30 * s), int(325 * s), int(cx + 62 * s), int(370 * s)))

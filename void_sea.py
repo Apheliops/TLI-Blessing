@@ -269,12 +269,9 @@ OWNED_RX = re.compile(r"(\d)\s*/\s*6\s*$")   # "4 / 6" ("14 / 6" okunsa da son r
 
 
 def grab(monitor_index=1):
-    import mss
-    from PIL import Image
-    with mss.mss() as sct:
-        mon = sct.monitors[min(monitor_index, len(sct.monitors) - 1)]
-        shot = sct.grab(mon)
-        return Image.frombytes("RGB", shot.size, shot.rgb)
+    """Oyun penceresini yakalar (pencere modunda sadece o alan); bulunamazsa seçili monitörün tamamını."""
+    from screen_reader import grab_screen
+    return grab_screen(monitor_index)
 
 
 def _ocr_winocr(img):
@@ -366,8 +363,8 @@ def read_owned(img):
     from PIL import ImageOps
     W, H = img.size
     crop = img.crop((int(W * 0.80), 0, W, H))
-    s = 2 if crop.width < 1000 else 1
-    big = crop.resize((crop.width * s, crop.height * s))
+    s = (2 if crop.width < 1000 else 1) * max(1.0, 1440 / H)     # düşük çözünürlükte daha çok büyüt
+    big = crop.resize((int(crop.width * s), int(crop.height * s)))
     big = ImageOps.autocontrast(big.convert("L")).convert("RGB")
     lines = [t for t, *_ in _ocr_any(big)]
     owned_n = None
@@ -473,7 +470,7 @@ def _reading_order(lines, tol=28):
     return [p for _, parts in rows for p in sorted(parts, key=lambda p: p[1])]
 
 
-def _white_numbers(crop, np, Image, thr=200):
+def _white_numbers(crop, np, Image, thr=200, f=1.0):
     """Kartlardaki kalın beyaz rakamlar (renkli okumada düşebiliyor): sadece beyaz pikselleri
     siyah-beyaz maske yapıp beyaz alanın etrafından sıkı kırparak okur. Küçük rakam büyük boş
     alanda kalınca OCR kararsız olduğu için birkaç büyütme oranı sırayla denenir."""
@@ -485,7 +482,8 @@ def _white_numbers(crop, np, Image, thr=200):
     box = (max(0, xs.min() - 12), max(0, ys.min() - 12), xs.max() + 12, ys.max() + 12)
     mask = Image.fromarray(np.where(wm, 0, 255).astype("uint8")).convert("RGB").crop(box)
     for s in (3, 4, 5, 2):
-        found = _reading_order(_ocr_any(mask.resize((mask.width * s, mask.height * s))))
+        s *= f            # düşük çözünürlükte (1080p…) yazı küçük: büyütme oranı 1440p'ye göre ölçeklenir
+        found = _reading_order(_ocr_any(mask.resize((int(mask.width * s), int(mask.height * s)))))
         nums = [n for t, *_ in found for n in re.findall(r"\d+(?:[.,]\d+)?", t)]
         if nums:
             return nums
@@ -500,17 +498,18 @@ def read_cards_color(img, lines):
     W, H = img.size
     sw = [x for t, x, y in lines if re.fullmatch(r"\W*switch\W*", t, re.I)]
     cx0 = sw[0] if sw else W / 2
+    f = max(1.0, 1440 / H)       # 1080p'de kart yazısı 1440p'dekinin 3/4'ü: büyütmeyi ona göre artır
     cards = []
     for dx in (-0.315, 0.0, 0.315):
         cx = cx0 + dx * H
         box = (int(max(0, cx - 0.17 * H)), int(0.565 * H), int(min(W, cx + 0.17 * H)), int(0.69 * H))
         crop = img.crop(box)
-        white_nums = _white_numbers(crop, np, Image)
+        white_nums = _white_numbers(crop, np, Image, f=f)
         # önce 2 kat; etki çıkmazsa 3 kat dene ("Drop Rarity" 2 katta "Dro Rarit" okunabiliyor).
         # bir geçişte bulunan başlık sonrakinde okunamasa da korunur (kart listeden düşmesin)
         head = ""
-        for s in (2, 3):
-            col = [t for t, *_ in _reading_order(_ocr_any(crop.resize((crop.width * s, crop.height * s))))]
+        for s in (2 * f, 3 * f):
+            col = [t for t, *_ in _reading_order(_ocr_any(crop.resize((int(crop.width * s), int(crop.height * s)))))]
             head = next((t for t in col if re.search(r"of", t, re.I) and _side_of_heading(t)), "") or head
             body = [t for t in col if t != head]
             standalone = [NUM_LINE_RX.match(t).group(1) for t in body if NUM_LINE_RX.match(t)]

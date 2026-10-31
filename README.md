@@ -14,7 +14,8 @@ The app only **reads the game's log file and takes screenshots**. It does not re
 - Windows 10 / 11
 - [Python 3.9+](https://www.python.org/downloads/) — tick **"Add python.exe to PATH"** during setup
 - Game language: **English** (the screen reader expects English text)
-- Tested at 2560×1440; other 16:9 resolutions are scaled automatically
+- Screen: 16:9, tested at **2560×1440** and **1920×1080** (other resolutions are scaled automatically; below 1080p reading gets less reliable)
+- Fullscreen, borderless and **windowed** mode all work — the app finds the game window and reads only that
 
 ## Installation
 
@@ -141,7 +142,7 @@ When moving the app to another folder, copy `userdata` too.
 
 - **LOG is red** — see *Turning on the game log*.
 - **Picture is red** — run `Setup.bat` again (Tesseract-OCR or a Python package is missing).
-- **Game on a second monitor** — set **Screen #** in the main window to `2`.
+- **Game not found** — the app reads the game window directly. Only if it can't find it does it read a whole monitor: then set **Screen #** in the main window to the monitor the game is on.
 - **Cards not read** — press **Read** once the cards have finished animating.
 
 ---
