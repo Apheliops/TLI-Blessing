@@ -130,16 +130,19 @@ This repository does **not** include a loot filter or any item-pickup script —
 
 ## Your data
 
-Everything personal is stored in the `userdata` folder next to the app (it is excluded from Git):
+Everything personal is stored in the `userdata` folder next to the app — it stays on your PC and is never uploaded anywhere:
 
 | File | Content |
 |---|---|
 | `tli_blessing_data.json` | settings and learned prices |
-| `voidsea_kayit.json` / `.csv` | Void Sea run log (whispers, memories, reds) — keep it, the learning depends on it |
-| `voidsea_kayit.yedek.json` | automatic backup of the run log |
+| `voidsea_runs.json` / `.csv` | Void Sea run log (whispers, memories, reds) — keep it, the learning depends on it |
+| `voidsea_runs.backup.json` | automatic backup of the run log |
 | `voidsea_model.json` | what the app learned from your runs, with history |
-| `rakamlar.json`, `ornekler/` | digit samples learned from your purchases (better price reading) |
-| `son_tarama*.png`, `hata_log.txt` | last failed screen read and error log, for troubleshooting |
+| `learned_digits.json`, `price_samples/` | digit samples learned from your purchases (better price reading) |
+| `last_scan*.png`, `error_log.txt` | last failed screen read and error log, for troubleshooting |
+| `icon.png` | app icon, downloaded once from tlidb |
+
+Older versions used Turkish file names (`voidsea_kayit.json` …); they are renamed automatically on the first start — nothing is lost.
 
 When moving the app to another folder, copy `userdata` too.
 

@@ -56,7 +56,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "5.4"
+APP_VERSION = "5.5"
 
 # Başlangıç fiyatları (28.10.2026 log'undan). Exchange'te aratınca güncel fiyatla değişir.
 SEED_PRICES = {"5028": {"prices": [0.086957, 0.097015, 0.09902, 0.1, 0.1], "ts": 1793213507},
@@ -102,6 +102,36 @@ def migrate_user_files():
                 os.replace(src, dst)
             except OSError:
                 pass
+    # v5.5: userdata içindeki Türkçe dosya adları İngilizce adlara TAŞINIR (yeniden adlandırma; silinmez).
+    # Yeni adda dosya zaten varsa ikisine de dokunulmaz.
+    try:
+        extra = [(f, "voidsea_runs.json.corrupt-" + f.split(".bozuk-", 1)[1])
+                 for f in os.listdir(USER_DIR) if f.startswith("voidsea_kayit.json.bozuk-")]
+    except OSError:
+        extra = []
+    for old, new in list(USER_RENAMES.items()) + extra:
+        src, dst = os.path.join(USER_DIR, old), os.path.join(USER_DIR, new)
+        if os.path.exists(src) and not os.path.exists(dst):
+            try:
+                os.replace(src, dst)
+            except OSError:
+                pass
+
+
+USER_RENAMES = {"rakamlar.json": "learned_digits.json", "voidsea_kayit.json": "voidsea_runs.json",
+                "voidsea_kayit.csv": "voidsea_runs.csv", "voidsea_kayit.yedek.json": "voidsea_runs.backup.json",
+                "son_tarama.png": "last_scan.png", "son_tarama_voidsea.png": "last_scan_voidsea.png",
+                "hata_log.txt": "error_log.txt", "ornekler": "price_samples", "simge.png": "icon.png"}
+
+
+def user_file(name):
+    """userdata içindeki dosyanın yolu. Yeniden adlandırma bir sebeple yapılamadıysa (dosya kilitli vb.)
+    eski adı kullan: kayıt asla ikiye bölünmesin."""
+    new = os.path.join(USER_DIR, name)
+    old = next((os.path.join(USER_DIR, o) for o, n in USER_RENAMES.items() if n == name), None)
+    if old and not os.path.exists(new) and os.path.exists(old):
+        return old
+    return new
 
 
 migrate_user_files()
@@ -1089,12 +1119,12 @@ def run_gui(start_hidden=False):
                 ok = SR.looks_like_blessings(offers)
                 if ok:
                     try:
-                        SR.save_samples(offers, os.path.join(USER_DIR, "ornekler"))
+                        SR.save_samples(offers, user_file("price_samples"))
                     except Exception:
                         pass
                 if not ok and why == "manual":
                     try:
-                        img.save(os.path.join(USER_DIR, "son_tarama.png"))
+                        img.save(user_file("last_scan.png"))
                     except Exception:
                         pass
                 q.put(("offers", {"offers": offers, "ok": ok, "why": why}))
@@ -1586,7 +1616,7 @@ def run_gui(start_hidden=False):
     # ======================= VOID SEA SEKMESİ =======================
     import void_sea as VS
     vs = VS.VoidSeaState()
-    vs_log = VS.RunLog(os.path.join(USER_DIR, "voidsea_kayit.json"), data["settings"])   # koşu başına fısıltılar + kırmızı sayısı
+    vs_log = VS.RunLog(user_file("voidsea_runs.json"), data["settings"])   # koşu başına fısıltılar + kırmızı sayısı
     vs_st = {"scanning": False, "msg": "Open the Void Sea Terminal or press “Read”.", "watcher": None}
     VS_COL = {"arm": ACC, "won": "#5fc4d6", "wea": MUTED, "?": MUTED}
     VS_PICKED = "#c3a6ff"                    # seçilmiş fısıltılar: Armament/Wonder renklerinden ayrı, açık mor
@@ -1671,7 +1701,7 @@ def run_gui(start_hidden=False):
                 vs_st["msg"] = f"{t} read" + (f" · {vs.note}" if vs.note else "")
                 if not vs.complete() or vs.note.startswith("read "):   # eksik okunan ekranı incelemek için sakla
                     try:
-                        img.save(os.path.join(USER_DIR, "son_tarama_voidsea.png"))
+                        img.save(user_file("last_scan_voidsea.png"))
                     except Exception:
                         pass
                 if not vs.complete():
@@ -1679,7 +1709,7 @@ def run_gui(start_hidden=False):
             else:
                 vs_st["msg"] = f"⚠ {t} not read — press “Read” while the screen is open"
                 try:
-                    img.save(os.path.join(USER_DIR, "son_tarama_voidsea.png"))
+                    img.save(user_file("last_scan_voidsea.png"))
                 except Exception:
                     pass
         elif ev == "error":
@@ -1926,7 +1956,7 @@ def run_gui(start_hidden=False):
             if tb not in seen_errors:
                 seen_errors.add(tb)
                 try:
-                    with open(os.path.join(USER_DIR, "hata_log.txt"), "a", encoding="utf-8") as f:
+                    with open(user_file("error_log.txt"), "a", encoding="utf-8") as f:
                         f.write(f"{datetime.now().isoformat()} v{APP_VERSION}\n{tb}\n")
                 except Exception:
                     pass

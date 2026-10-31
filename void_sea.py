@@ -983,7 +983,8 @@ class RunLog:
         self.model_path = os.path.join(os.path.dirname(path) or ".", "voidsea_model.json")
         self.model = None
         self.csv_path = os.path.splitext(path)[0] + ".csv"
-        self.backup_path = os.path.splitext(path)[0] + ".yedek.json"
+        base = os.path.splitext(path)[0]       # eski adlı kayıt (voidsea_kayit) kullanılıyorsa eski yedek adı
+        self.backup_path = base + (".yedek.json" if base.endswith("voidsea_kayit") else ".backup.json")
         self.runs = []
         self.active = False     # terminaldeyiz (girişten sonraki ilk bölge değişimine kadar)
         self.runs = self._load()
@@ -1000,7 +1001,7 @@ class RunLog:
                 return json.load(f)
         except (OSError, ValueError):
             try:
-                os.replace(self.path, self.path + f".bozuk-{time.strftime('%Y%m%d-%H%M%S')}")
+                os.replace(self.path, self.path + f".corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
             except OSError:
                 pass
             try:
@@ -1029,7 +1030,7 @@ class RunLog:
             keys = list(totals([]).keys())
             with open(self.csv_path, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f, delimiter=";")
-                w.writerow(["tarih", "kirmizi", "toplanan_memory"] + keys + ["fisiltilar"])
+                w.writerow(["date", "red", "memories_picked_up"] + keys + ["whispers"])
                 for r in self.runs:
                     t = totals([tuple(e) for e in r["effects"]])
                     w.writerow([r["t"], r["red"], r["memories"]] + [f"{t[k]:g}" for k in keys]
@@ -1085,12 +1086,13 @@ class RunLog:
             hist = []
             if os.path.exists(self.model_path):
                 with open(self.model_path, encoding="utf-8") as f:
-                    hist = json.load(f).get("gecmis", [])
+                    old = json.load(f)
+                    hist = old.get("history", old.get("gecmis", []))      # v5.5 öncesi anahtar: "gecmis"
             if not hist or hist[-1].get("runs") != info["runs"] or hist[-1].get("red") != info["red"]:
                 hist.append(info)
             tmp = self.model_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"guncel": info, "gecmis": hist}, f, ensure_ascii=False, indent=1)
+                json.dump({"current": info, "history": hist}, f, ensure_ascii=False, indent=1)
             os.replace(tmp, self.model_path)
         except (OSError, ValueError):
             pass

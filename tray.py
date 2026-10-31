@@ -121,7 +121,7 @@ def exe_icon(path, size=64):
 
 
 ICON_URL = "https://cdn.tlidb.com/UI/Textures/Common/Icon/GamePlay/UI_S3BossTicket1_Icon_128.webp"  # Desire Core - Record
-ICON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "userdata", "simge.png")   # indirilen, oyunun görseli
+ICON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "userdata", "icon.png")   # indirilen, oyunun görseli
 
 
 def desire_core_icon():

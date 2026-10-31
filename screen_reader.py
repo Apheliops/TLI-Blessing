@@ -150,7 +150,9 @@ def _to_img(mask, np, Image, scale, pad=8):
 # ---------------- Rakam tanıma (oyunun kendi fontundan şablonlar) ----------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
 BUILTIN_DIGITS = os.path.join(_HERE, "digits.json")        # hazır şablonlar
-LEARNED_DIGITS = os.path.join(_HERE, "userdata", "rakamlar.json")   # alımlardan öğrenilenler (kişisel)
+LEARNED_DIGITS = os.path.join(_HERE, "userdata", "learned_digits.json")   # alımlardan öğrenilenler (kişisel)
+if not os.path.exists(LEARNED_DIGITS) and os.path.exists(os.path.join(_HERE, "userdata", "rakamlar.json")):
+    LEARNED_DIGITS = os.path.join(_HERE, "userdata", "rakamlar.json")   # v5.5 öncesi ad (taşınamadıysa)
 GW, GH = 16, 24
 _templates = None
 
