@@ -1,0 +1,56 @@
+name: Bug report
+description: Something doesn't work or reads the screen wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The more of the fields below you fill in, the faster it can be fixed.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown at the bottom of the overlay (e.g. v5.5)
+      placeholder: v5.5
+    validations:
+      required: true
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part?
+      options:
+        - Blessings / DS Calculator
+        - Void Sea Seal (flames)
+        - Void Sea Terminal (cards)
+        - Run log / memory counting
+        - Overlay / main window
+        - Setup / starting the app
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: screen
+    attributes:
+      label: Game resolution and window mode
+      placeholder: 1920x1080, windowed
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: |
+        Drag and drop images here — a full screenshot of the game with the overlay visible helps most.
+        For Void Sea, keep the "Seal Whispers Owned" panel on the right open.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error log (optional)
+      description: If `userdata\error_log.txt` exists, drag it here or paste its content.
+      render: text

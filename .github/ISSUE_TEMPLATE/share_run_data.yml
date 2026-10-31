@@ -1,0 +1,35 @@
+name: Share Void Sea run data
+description: Share your run log to help find out how many runs a red (Ultimate) memory really takes
+labels: [run-data]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing! The file is `userdata\voidsea_runs.csv`.
+        It only contains your whispers, memory counts, red counts and run dates/times —
+        **no account name, character or any other personal info.**
+  - type: textarea
+    id: csv
+    attributes:
+      label: voidsea_runs.csv
+      description: Drag and drop the file here.
+    validations:
+      required: true
+  - type: input
+    id: filter
+    attributes:
+      label: Loot filter
+      description: Which Hero Memory qualities does your loot filter show, and did you change it during these runs?
+      placeholder: Epic and above, not changed
+    validations:
+      required: true
+  - type: input
+    id: map
+    attributes:
+      label: Map tier
+      placeholder: T8 / Profound / Deep Space
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes (optional)
+      description: Anything that may matter — e.g. you didn't pick up every memory in some runs, or pressed +1 late.

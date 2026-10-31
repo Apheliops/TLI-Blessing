@@ -1,0 +1,52 @@
+name: Language support
+description: Help add support for a game language other than English
+labels: [language]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The screen reader currently expects English game text. To add another language, screenshots of the
+        relevant screens **in that language** are needed. Full-size screenshots work best (no cropping).
+  - type: dropdown
+    id: language
+    attributes:
+      label: Game text language
+      options:
+        - 简体中文 (Simplified Chinese)
+        - 繁體中文 (Traditional Chinese)
+        - 한국어 (Korean)
+        - 日本語 (Japanese)
+        - Português (Portuguese)
+        - Français (French)
+        - Español (Spanish)
+        - Deutsch (German)
+        - Русский (Russian)
+        - Tiếng Việt (Vietnamese)
+        - ไทย (Thai)
+        - Bahasa Indonesia (Indonesian)
+    validations:
+      required: true
+  - type: input
+    id: screen
+    attributes:
+      label: Game resolution and window mode
+      placeholder: 1920x1080, windowed
+  - type: textarea
+    id: blessings
+    attributes:
+      label: Blessings from Gods screen
+      description: A screenshot with all 8 offers visible.
+  - type: textarea
+    id: seal
+    attributes:
+      label: Void Sea Seal screen
+      description: |
+        Screenshots with the "Seal Whispers Owned" panel on the right open — ideally one with each flame selected
+        (the text under the flames changes).
+  - type: textarea
+    id: terminal
+    attributes:
+      label: Void Sea Terminal screen
+      description: |
+        Screenshots of the 3 whisper cards with the "Seal Whispers Owned" panel open. Different card types
+        (Armament / Wonder / Wealth) and effects help most.
