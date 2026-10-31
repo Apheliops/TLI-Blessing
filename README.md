@@ -109,6 +109,11 @@ After **5 recorded runs** the advice is tuned to your own data:
 - The app learns how strong each whisper type really is from both the memory counts and the success / failure labels, and shows a **Target combination** (plus 2 alternatives) — the 6 whispers that currently look best.
 - With little data it stays close to the model above; with more runs it trusts your data more.
 
+### What to expect
+
+- **It does not guarantee red memories**, from the start or later on. The goal is that, once it has collected enough data, the number and the rarity of the Hero Memories you get go up.
+- **All of its data is collected locally, only from you.** Nothing is shared with or taken from other players — so how well it learns depends entirely on your own data (see below).
+
 ### ⚠ Your data must be consistent
 
 The app can only count what **you pick up**, and only in the **Void Sea map**. The game log does not show items that dropped but were not picked up, nor memories hidden by your loot filter. So the learning is only as good as your habits:
