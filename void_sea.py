@@ -501,13 +501,19 @@ def read_cards_color(img, lines):
     import numpy as np
     from PIL import Image
     W, H = img.size
-    sw = [x for t, x, y in lines if re.fullmatch(r"\W*switch\W*", t, re.I)]
-    cx0 = sw[0] if sw else W / 2
+    sw = [(x, y) for t, x, y in lines if re.fullmatch(r"\W*switch\W*", t, re.I)]
+    cx0 = sw[0][0] if sw else W / 2
+    # arayüz ölçeği: sahne ekranın dikey ortasına göre çiziliyor; varsayılan ölçekte Switch merkezin 0.25·H
+    # üstünde. Daha büyük ölçekte (ör. 21:9 ekranda %7-8) kartlar da birbirinden o oranda uzak.
+    ui = min(1.3, max(0.85, (0.5 * H - sw[0][1]) / (0.25 * H))) if sw else 1.0
+    if abs(ui - 1.0) < 0.03:      # varsayılan ölçek (16:9): eski, denenmiş konumlar aynen kalsın
+        ui = 1.0
     f = max(1.0, 1440 / H)       # 1080p'de kart yazısı 1440p'dekinin 3/4'ü: büyütmeyi ona göre artır
     cards = []
-    for dx in (-0.315, 0.0, 0.315):
+    for dx in (-0.315 * ui, 0.0, 0.315 * ui):
         cx = cx0 + dx * H
-        box = (int(max(0, cx - 0.17 * H)), int(0.565 * H), int(min(W, cx + 0.17 * H)), int(0.69 * H))
+        box = (int(max(0, cx - 0.17 * ui * H)), int((0.5 + 0.065 * ui) * H),
+               int(min(W, cx + 0.17 * ui * H)), int((0.5 + 0.19 * ui) * H))
         crop = img.crop(box)
         white_nums = _white_numbers(crop, np, Image, f=f)
         # önce 2 kat; etki çıkmazsa 3 kat dene ("Drop Rarity" 2 katta "Dro Rarit" okunabiliyor).

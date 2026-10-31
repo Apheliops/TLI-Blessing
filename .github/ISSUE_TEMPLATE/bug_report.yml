@@ -52,5 +52,7 @@ body:
     id: logs
     attributes:
       label: Error log (optional)
-      description: If `userdata\error_log.txt` exists, drag it here or paste its content.
+      description: |
+        If `userdata\error_report.md` exists, drag it here (and the matching screenshot from `userdata\error_screens`).
+        Older versions: `userdata\error_log.txt`.
       render: text

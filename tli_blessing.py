@@ -56,7 +56,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "5.7"
+APP_VERSION = "5.8"
 
 # Başlangıç fiyatları (28.10.2026 log'undan). Exchange'te aratınca güncel fiyatla değişir.
 SEED_PRICES = {"5028": {"prices": [0.086957, 0.097015, 0.09902, 0.1, 0.1], "ts": 1793213507},
@@ -135,6 +135,69 @@ def user_file(name):
 
 
 migrate_user_files()
+
+
+# --------------------------------------------------------------------------- #
+# Hata raporu: okuma hataları ve program hataları, ekran görüntüsüyle birlikte
+# userdata\error_report.md (en yeni en altta) + userdata\error_screens\*.jpg
+# --------------------------------------------------------------------------- #
+REPORT_MAX_BYTES = 300_000      # md bundan büyürse eski kayıtların yarısı silinir
+REPORT_MAX_SCREENS = 30
+_last_report = {"key": None, "t": 0.0}
+
+
+def report_error(area, message, details=(), img=None):
+    """Bir hatayı error_report.md'ye yazar; varsa ekran görüntüsünü error_screens'e kaydedip bağlar.
+    Aynı hata 60 sn içinde tekrar gelirse yazılmaz (otomatik tekrar denemeler kaydı şişirmesin)."""
+    details = [str(d) for d in details if d]
+    key = (area, message, tuple(details))
+    now = time.time()
+    if key == _last_report["key"] and now - _last_report["t"] < 60:
+        return
+    _last_report.update(key=key, t=now)
+    try:
+        stamp = datetime.now()
+        lines = [f"## {stamp.strftime('%Y-%m-%d %H:%M:%S')} — {area}", "",
+                 f"- **App version:** v{APP_VERSION}"]
+        if img is not None:
+            lines.append(f"- **Captured area:** {img.size[0]}×{img.size[1]}")
+        lines.append(f"- **Error:** {message}")
+        if details:
+            lines.append("- **Details:**")
+            for d in details:
+                if "\n" in d:                      # çok satırlı (program hatası): kod bloğu
+                    lines += ["", "```text", d.rstrip(), "```"]
+                else:
+                    lines.append(f"  - {d}")
+        if img is not None:
+            sdir = os.path.join(USER_DIR, "error_screens")
+            os.makedirs(sdir, exist_ok=True)
+            name = f"{stamp.strftime('%Y%m%d-%H%M%S')}_{area.split()[0].lower()}.jpg"
+            img.convert("RGB").save(os.path.join(sdir, name), quality=90)
+            lines += ["", f"![screenshot](error_screens/{name})"]
+            old = sorted(f for f in os.listdir(sdir) if f.endswith(".jpg"))
+            for f in old[:-REPORT_MAX_SCREENS]:
+                os.remove(os.path.join(sdir, f))
+        path = os.path.join(USER_DIR, "error_report.md")
+        text = ""
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        if not text:
+            text = ("# TLI Blessing Helper — error report\n\n"
+                    "Screen-reading problems and program errors, newest at the bottom. "
+                    "Attach this file and the matching screenshot from `error_screens` to a bug report.\n")
+        text = text.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n"
+        if len(text.encode("utf-8")) > REPORT_MAX_BYTES:        # eski kayıtların yarısını at
+            head, _, rest = text.partition("\n## ")
+            entries = rest.split("\n## ")
+            text = head + "\n## " + "\n## ".join(entries[len(entries) // 2:])
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except Exception:
+        pass
 
 
 def item_name(cid):
@@ -1104,6 +1167,7 @@ def run_gui(start_hidden=False):
         except Exception as e:
             st["ocr_msg"] = f"⚠ {e}"
             st["pic"] = False
+            report_error("Blessings", f"screen reader not available: {e}")
             st["dirty"] = True
             return
         # pencere kartların üstünü kapatmasın: yakalarken görünmez yap
@@ -1116,6 +1180,7 @@ def run_gui(start_hidden=False):
         except Exception as e:
             st["ocr_msg"] = f"⚠ Screen capture failed: {e}"
             st["pic"] = False
+            report_error("Blessings", f"screen capture failed: {e}")
             st["dirty"] = True
             return
         finally:
@@ -1140,7 +1205,7 @@ def run_gui(start_hidden=False):
                         img.save(user_file("last_scan.png"))
                     except Exception:
                         pass
-                q.put(("offers", {"offers": offers, "ok": ok, "why": why}))
+                q.put(("offers", {"offers": offers, "ok": ok, "why": why, "img": img}))
             except Exception as e:
                 q.put(("ocr_error", str(e)))
 
@@ -1189,6 +1254,7 @@ def run_gui(start_hidden=False):
             st["ocr_msg"] = f"⚠ {t}: could not read the Blessings screen (is it open? is 'Screen #' right?) — try again."
             st["scan_info"] = {"t": t, "fail": True}
             st["pic"] = False
+            report_error("Blessings", "could not read the Blessings screen (manual read)", img=v.get("img"))
         else:
             st["pic"] = True
             new = v["offers"]
@@ -1221,6 +1287,9 @@ def run_gui(start_hidden=False):
                 root.after(1100, lambda: start_scan("retry"))
             elif why != "retry":
                 st["retries"] = 0
+            if bad and not retrying:          # tekrar denemeler bitti, hâlâ okunamayan kart var
+                report_error("Blessings", f"{len(bad)} of {checked} card(s) not read",
+                             [f"#{o['slot']}: {o['problem']}" for o in bad], v.get("img"))
         if why != "retry" and not retrying:
             st["retries"] = 0
         if st["scan_pending"] and not retrying:
@@ -1692,6 +1761,7 @@ def run_gui(start_hidden=False):
             img = VS.grab(int(data["settings"].get("monitor", 1)))
         except Exception as e:
             vs_st["msg"] = f"⚠ Screen capture failed: {e}"
+            report_error("Void Sea", f"screen capture failed: {e}")
             st["pic"] = False
             render_vs()
             return
@@ -1751,8 +1821,13 @@ def run_gui(start_hidden=False):
                         pass
                 if not vs.complete():
                     vs_st["msg"] = f"⚠ {t} some cards were not read — press “Read”"
+                if not vs.complete() or vs.note:
+                    report_error("Void Sea", "some cards were not read" if not vs.complete() else vs.note,
+                                 [f"screen: {res['mode']}", f"owned panel: {res.get('owned_n')}"]
+                                 + [f"{VS.SIDE_LABEL[sd]}: {VS.describe(e)}" for sd, e, _ in vs.cards], img)
             else:
                 vs_st["msg"] = f"⚠ {t} not read — press “Read” while the screen is open"
+                report_error("Void Sea", "screen not read (manual read)", [f"screen: {res['mode']}"], img)
                 try:
                     img.save(user_file("last_scan_voidsea.png"))
                 except Exception:
@@ -1761,6 +1836,7 @@ def run_gui(start_hidden=False):
             st["pic"] = False
             vs_st["scanning"] = False
             vs_st["msg"] = f"⚠ OCR error: {val}"
+            report_error("Void Sea", "OCR error", [str(val)])
         elif ev == "entered":
             vs.reset()
             vs_log.start(val)
@@ -1959,6 +2035,7 @@ def run_gui(start_hidden=False):
                     st["pic"] = False
                     st["scanning"] = False
                     st["ocr_msg"] = f"⚠ OCR error: {v}"
+                    report_error("Blessings", "OCR error", [v])
                 elif k == "vs":
                     on_vs(*v)
                     continue
@@ -2005,6 +2082,7 @@ def run_gui(start_hidden=False):
                         f.write(f"{datetime.now().isoformat()} v{APP_VERSION}\n{tb}\n")
                 except Exception:
                     pass
+                report_error("Program error", tb.strip().splitlines()[-1], [tb])
             st["dirty"] = True
         if alive:
             root.after(400, pump)

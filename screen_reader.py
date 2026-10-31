@@ -259,12 +259,20 @@ def _read_price_once(im, cx, s, np, Image, pytesseract, lo, spread):
     rows = m.sum(1)
     if rows.max() < 2:
         return None, [], "price text not visible (card covered or screen moving)"
-    best = int(rows.argmax())
-    lo = hi = best
-    while lo > 0 and rows[lo - 1] > 0:
-        lo -= 1
-    while hi < len(rows) - 1 and rows[hi + 1] > 0:
-        hi += 1
+    # rakam satırı: art arda dolu satırlardan oluşan, toplamda en çok beyaz içeren ve yeterince yüksek bant.
+    # (tek "en beyaz satır" yetmiyor: kartın alt kenarındaki ince çizgi tek satırda rakamlardan beyaz olabiliyor)
+    groups, y = [], 0
+    while y < len(rows):
+        if rows[y] > 0:
+            e = y
+            while e < len(rows) and rows[e] > 0:
+                e += 1
+            groups.append((y, e - 1))
+            y = e
+        else:
+            y += 1
+    tall = [g for g in groups if g[1] - g[0] + 1 >= 7 * s] or groups
+    lo, hi = max(tall, key=lambda g: rows[g[0]:g[1] + 1].sum())
     band = m[lo:hi + 1]
     cols = np.nonzero(band.sum(0))[0]
     sub = band[:, cols.min():cols.max() + 1]
@@ -316,7 +324,8 @@ def _read_price_once(im, cx, s, np, Image, pytesseract, lo, spread):
 
 def _sold_out(im, cx, s, np):
     a = np.asarray(im.crop((int(cx - 50 * s), int(325 * s), int(cx + 50 * s), int(370 * s)))).astype(int)
-    red = ((a[..., 0] > 170) & (a[..., 1] < 110) & (a[..., 2] < 110)).sum()
+    # "Sold out" kırmızısı: yeşil ve mavi birbirine yakın; Flame Elementium kartının turuncusunda yeşil, maviden çok yüksek
+    red = ((a[..., 0] > 170) & (a[..., 1] < 110) & (a[..., 2] < 110) & (abs(a[..., 1] - a[..., 2]) < 40)).sum()
     return red > 60 * s * s
 
 
@@ -376,6 +385,42 @@ def _card_top(im, cx, s, np):
     return CARD_TOP * s
 
 
+def _locate_cards(im, s, np):
+    """Kartları ekranda bul: kartların renkli zemini koyu arka plandan belirgin parlak.
+    21:9 gibi geniş ekranlarda ve farklı arayüz ölçeklerinde kartlar varsayılan yerde durmuyor
+    (geniş ekranda arayüz ortalanmıyor, sola dayalı; ölçek oyuncunun ayarına göre değişebiliyor).
+    -> (8 kartın merkezleri, etkin ölçek) | None"""
+    W, H = im.size
+    y0, y1 = int(140 * s), int(200 * s)
+    col = np.asarray(im.crop((0, y0, W, y1)).convert("RGB")).astype(float).max(2).mean(0) / 255
+    mask = col > 0.30
+    runs, x = [], 0
+    while x < W:
+        if mask[x]:
+            e = x
+            while e < W and mask[e]:
+                e += 1
+            runs.append((x, e))
+            x = e
+        else:
+            x += 1
+    cands = [(a + b) / 2 for a, b in runs if 80 * s <= b - a <= 170 * s]    # sarı sekme gibi geniş alanlar elenir
+    gaps = [b - a for a, b in zip(cands, cands[1:]) if 150 * s <= b - a <= 230 * s]
+    if len(cands) < 4 or not gaps:
+        return None
+    spacing = float(np.median(gaps))
+    k = spacing / (CARD_DX * s)                 # oyunun arayüz ölçeği / varsayılan
+    if not 0.85 <= k <= 1.25:
+        return None
+    # en soldaki bulunan kart hangi sırada? (satılmış kartlar sönük olup bulunamayabilir)
+    n0 = max(0, round((cands[0] - CARD_X0 * s * k) / spacing))
+    c0 = cands[0] - n0 * spacing
+    fits = sum(1 for c in cands if abs(((c - c0) / spacing) - round((c - c0) / spacing)) < 0.15)
+    if fits < 4:
+        return None
+    return [c0 + i * spacing for i in range(N_CARDS)], s * k
+
+
 def read_offers(im, item_names=None):
     """PIL görüntüsünden 8 teklifi okur.
     Dönen: [{"slot","text","cid","qty","price","sold","excluded"}]"""
@@ -387,19 +432,29 @@ def read_offers(im, item_names=None):
         im = im.resize((round(W * 1440 / H), 1440), Image.LANCZOS)
         W, H = im.size
     s = H / 1440.0
-    # 16:9'dan geniş ekranlarda arayüz ortalanır
-    x_off = (W - 2560 * s) / 2 if W / H > 16 / 9 + 0.01 else 0
+    # kartları ekranda bul; bulunamazsa 1440p varsayılan konumları (arayüz sola dayalı, geniş ekranda da)
+    found = _locate_cards(im, s, np)
+    if found:
+        centers, s = found
+    else:
+        centers = [(CARD_X0 + CARD_DX * i) * s for i in range(N_CARDS)]
     out = []
     for i in range(N_CARDS):
-        cx = x_off + (CARD_X0 + CARD_DX * i) * s
-        sold = _sold_out(im, cx, s, np)
+        cx = centers[i]
+        # dikey hizalama: kartın bulunan üst kenarına göre (yenileme animasyonu, farklı arayüz ölçeği)
+        top = _card_top(im, cx, s, np)
+        dy = int(round(top - CARD_TOP * s))
+        if abs(dy) > 80 * s:
+            dy, top = 0, CARD_TOP * s
+        cim = im.crop((0, dy, W, int(460 * s) + dy)) if dy else im     # bu kart için kaydırılmış görünüm
+        sold = _sold_out(cim, cx, s, np) or (dy != 0 and _sold_out(im, cx, s, np))   # satılmış kart sönük: üst kenar şaşabilir
         rec = {"slot": i + 1, "text": "", "cid": None, "qty": 1, "price": None, "sold": sold, "excluded": False,
                "price_why": "", "problem": ""}
         if not sold:
             # eşya tanınana kadar (ve adet "x20" gibi okunana kadar) gevşek eşikleri de dene
             best = None
             for lo, sp in NAME_THRESHOLDS:
-                txt = _read_name(im, cx, s, np, Image, pytesseract, lo, sp)
+                txt = _read_name(cim, cx, s, np, Image, pytesseract, lo, sp)
                 got = match_item(txt, item_names)
                 has_qty = bool(re.search(r"x\s?\d", txt.lower()))
                 if best is None or (got[0] or got[2]) and not (best[1][0] or best[1][2]):
@@ -410,15 +465,14 @@ def read_offers(im, item_names=None):
             rec["text"] = best[0]
             try:  # kartın ikonu (küçük panelde göstermek için): yenileme animasyonunda kart kayabildiği
                 #     için kesit, kartın bulunan üst kenarına göre alınır
-                top = _card_top(im, cx, s, np)
                 rec["icon"] = im.crop((int(cx - 52 * s), int(top + 34 * s), int(cx + 52 * s),
                                        int(top + 144 * s))).resize((40, 40), Image.LANCZOS)
             except Exception:
                 rec["icon"] = None
             rec["cid"], rec["qty"], rec["excluded"] = best[1]
             if not rec["excluded"]:
-                rec["price"], rec["glyphs"], rec["price_why"] = _read_price(im, cx, s, np, Image, pytesseract)
-                rec["price_img"] = im.crop((int(cx - 30 * s), int(325 * s), int(cx + 62 * s), int(370 * s)))
+                rec["price"], rec["glyphs"], rec["price_why"] = _read_price(cim, cx, s, np, Image, pytesseract)
+                rec["price_img"] = cim.crop((int(cx - 30 * s), int(325 * s), int(cx + 62 * s), int(370 * s)))
             # Okunamayan kartın NEDENİ (panelde gösterilir)
             if not rec["excluded"]:
                 if rec["cid"] is None:

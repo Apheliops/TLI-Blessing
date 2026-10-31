@@ -36,7 +36,7 @@ The app only **reads the game's log file and takes screenshots**. It does not re
 - Windows 10 / 11
 - [Python 3.9+](https://www.python.org/downloads/) — tick **"Add python.exe to PATH"** during setup
 - Game language: **English** for now (the screen reader expects English text). Other languages are planned — if you play in another language, opening a [GitHub issue](https://github.com/Apheliops/TLI-Blessing/issues) with screenshots of the Blessings and Void Sea Seal / Terminal screens helps add support.
-- Screen: 16:9, tested at **2560×1440** and **1920×1080** (other resolutions are scaled automatically; below 1080p reading gets less reliable)
+- Screen: tested at **2560×1440**, **1920×1080** and **2560×1080 (21:9 ultrawide)**. Other resolutions and in-game UI scales are detected automatically; below 1080p reading gets less reliable.
 - Fullscreen, borderless and **windowed** mode all work — the app finds the game window and reads only that
 
 ## Installation
@@ -161,7 +161,8 @@ Everything personal is stored in the `userdata` folder next to the app — it st
 | `voidsea_runs.backup.json` | automatic backup of the run log |
 | `voidsea_model.json` | what the app learned from your runs, with history |
 | `learned_digits.json`, `price_samples/` | digit samples learned from your purchases (better price reading) |
-| `last_scan*.png`, `error_log.txt` | last failed screen read and error log, for troubleshooting |
+| `error_report.md`, `error_screens/` | every reading problem and program error, with a screenshot — attach these to a bug report |
+| `last_scan*.png`, `error_log.txt` | last failed screen read and raw error log |
 | `icon.png` | app icon, downloaded once from tlidb |
 
 When moving the app to another folder, copy `userdata` too.
@@ -171,7 +172,7 @@ When moving the app to another folder, copy `userdata` too.
 - **LOG is red** — see *Turning on the game log*.
 - **Picture is red** — run `Setup.bat` again (Tesseract-OCR or a Python package is missing).
 - **Game not found** — the app reads the game window directly. Only if it can't find it does it read a whole monitor: then set **Screen #** in the main window to the monitor the game is on.
-- **Cards not read** — press **Read** once the cards have finished animating.
+- **Cards not read** — press **Read** once the cards have finished animating. If it keeps happening, open a [bug report](https://github.com/Apheliops/TLI-Blessing/issues/new/choose) and attach `userdata\error_report.md` with the matching screenshot from `userdata\error_screens`.
 
 ---
 
