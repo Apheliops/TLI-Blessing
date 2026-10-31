@@ -85,7 +85,7 @@ Keep the **Seal Whispers Owned** panel on the right side of the screen **open**:
 
 ### What it recommends
 
-- **Void Sea Seal (flames):** compares the *Armament* (top-left) and *Wonder* (top-right) flames. The flame colour is its quality — blue < purple < yellow. A yellow flame guarantees a *Rare or higher* whisper, purple *Magic or higher*, blue is assumed to be *Normal or higher*. When both flames give almost the same gain, the higher-quality flame is recommended.
+- **Void Sea Seal (flames):** compares the *Armament* (top-left) and *Wonder* (top-right) flames. The flame colour is its quality — blue < purple < yellow. A yellow flame guarantees a *Rare or higher* whisper, purple *Magic or higher*; a blue flame only guarantees the whisper type, its quality is random. When both flames give almost the same gain, the higher-quality flame is recommended.
 - **Void Sea Terminal (3 cards):** recommends the card that raises your expected number of red Hero Memories the most.
 - A pink **Why:** line explains the decision (e.g. *"Rarity raises the red rate 5.0% → 9.4%; the Armament card only +14%"*).
 
