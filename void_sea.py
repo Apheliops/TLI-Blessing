@@ -129,15 +129,17 @@ def totals(effects):
 
 
 # Öğrenilen modelde her etkinin memory'ye etkisi bir katsayıyla ölçeklenir:
-#   memory = taban × Π (1+etki)^c × (1 + sabit/(taban×Π))^c_sabit × (1+rarity)^c_rarity
-# Katsayılar 1 (rarity 0) iken yukarıdaki elle kurulan modelin aynısıdır.
-FIT_KEYS = ["baseQ", "tQty", "appear", "memQty", "flat", "rarity"]
-FIT_PRIOR = {"baseQ": 1.0, "tQty": 1.0, "appear": 1.0, "memQty": 1.0, "flat": 1.0, "rarity": 0.0}
+#   memory = taban × Π (1+etki)^c × (1 + sabit/(taban×Π))^c_sabit
+# Katsayılar 1 iken yukarıdaki elle kurulan modelin aynısıdır.
+# Rarity burada yok: memory sayısını değiştirmez, sadece taban düşüşlerin kırmızı oranını artırır
+# (v5.9'a kadar sayıya da katsayı öğreniliyordu; az veride sahte etki çıkıp öneriyi Rarity'ye kaydırıyordu).
+FIT_KEYS = ["baseQ", "tQty", "appear", "memQty", "flat"]
+FIT_PRIOR = {"baseQ": 1.0, "tQty": 1.0, "appear": 1.0, "memQty": 1.0, "flat": 1.0}
 
 
 def _features(t, base):
     nominal = (1 + t["baseQ"] / 100) * (1 + t["tQty"] / 100) * (1 + t["appear"] / 100) * (1 + t["memQty"] / 100)
-    x = {k: math.log(1 + t[k] / 100) for k in ("baseQ", "tQty", "appear", "memQty", "rarity")}
+    x = {k: math.log(1 + t[k] / 100) for k in ("baseQ", "tQty", "appear", "memQty")}
     x["flat"] = math.log(1 + (t["flat"] + t["luck"]) / (base * nominal))
     return x
 
@@ -848,10 +850,7 @@ def describe_learned(info):
     parts = []
     for k in FIT_KEYS:
         c, prior = info["c"][k], FIT_PRIOR[k]
-        if k == "rarity":
-            if c >= 0.15:
-                parts.append(f"Rarity also raises the memory count (×{c:.2f})")
-        elif c - prior >= 0.15:
+        if c - prior >= 0.15:
             parts.append(f"{EFFECT_NAMES[k]} stronger than expected (×{c:.2f})")
         elif prior - c >= 0.15:
             parts.append(f"{EFFECT_NAMES[k]} weaker than expected (×{c:.2f})")
