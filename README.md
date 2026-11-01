@@ -35,7 +35,7 @@ The app only **reads the game's log file and takes screenshots**. It does not re
 
 - Windows 10 / 11
 - [Python 3.9+](https://www.python.org/downloads/) — tick **"Add python.exe to PATH"** during setup
-- Game language: **English** for now (the screen reader expects English text). Other languages are planned — if you play in another language, opening a [GitHub issue](https://github.com/Apheliops/TLI-Blessing/issues) with screenshots of the Blessings and Void Sea Seal / Terminal screens helps add support.
+- Game language: **English** or **Simplified Chinese** (简体中文). Chinese needs the Windows Chinese (Simplified) OCR language pack, which Chinese Windows has by default. On other Windows, install it from an administrator PowerShell with `Add-WindowsCapability -Online -Name "Language.OCR~~~zh-CN~0.0.1.0"`. The app detects the game language by itself. If you play in another language, opening a [GitHub issue](https://github.com/Apheliops/TLI-Blessing/issues) with screenshots of the Blessings and Void Sea Seal / Terminal screens helps add support.
 - Screen: tested at **2560×1440**, **1920×1080** and **2560×1080 (21:9 ultrawide)**. Other resolutions and in-game UI scales are detected automatically; below 1080p reading gets less reliable.
 - Fullscreen, borderless and **windowed** mode all work — the app finds the game window and reads only that
 
@@ -63,6 +63,8 @@ The app finds the log automatically. If it can't, click **📂 Select log…** a
 ## Usage
 
 Closing the main window (X) does not quit the app; it goes to the system tray. **Start with Windows** starts it hidden in the tray. Use **Quit app** to close it.
+
+**Language** (bottom of the main window): **English** or **简体中文**. It changes the text of the main window and the overlay right away, no restart needed. It is only the interface language: reading the game screen follows the game's own language automatically, and the run log / error reports stay in English.
 
 ### The overlay
 
@@ -167,6 +169,8 @@ Everything personal is stored in the `userdata` folder next to the app — it st
 
 When moving the app to another folder, copy `userdata` too.
 
+**Update check:** at startup (and every 6 hours) the app asks GitHub for the latest release number of this repository. Nothing about you or your data is sent. If a newer version exists, a "new version available" bar appears in the main window and a one-line notice on the overlay. **Install update** downloads the release zip from this repository's GitHub Releases, replaces the program files and restarts the app; the `userdata` folder is never touched and the replaced files are kept in `_yedek\update-from-v<old version>`. **Release page** opens the download page instead, if you prefer to update by hand. Turn the check off with **Check for updates** at the bottom of the main window.
+
 ## Troubleshooting
 
 - **LOG is red** — see *Turning on the game log*.
@@ -181,6 +185,7 @@ When moving the app to another folder, copy `userdata` too.
 Thanks to everyone who helped make this tool better:
 
 - **LordZ3us97** — tested it on a 2560×1080 ultrawide screen and sent the screenshots that made 21:9 support possible ([#1](https://github.com/Apheliops/TLI-Blessing/issues/1)).
+- **Express_Cherry_39** — sent screenshots of the Chinese client (Void Sea Seal / Terminal and Blessings from Gods) that made Simplified Chinese support possible.
 
 Found a bug or play in another language or resolution? [Open an issue](https://github.com/Apheliops/TLI-Blessing/issues/new/choose) — every report helps.
 

@@ -48,6 +48,47 @@ EFFECT_PATTERNS = [
     ("tQty",   re.compile(PCT_OPT + r"\s*void\s*sea\s*treasure[\W_]*dro\w*[\W_]*quantit\w*", re.I), lambda m: _f(m.group(1))),
     ("none",   re.compile(r"memory\s*(?:scrap|thread)", re.I), lambda m: 0.0),
 ]
+# Çince istemci (v6.1; Reddit'ten bir oyuncunun 2560×1440 ekran görüntülerinden). Metin boşluksuz eşleşir:
+# Çince OCR karakterlerin arasına boşluk koyabiliyor. 英雄追忆 = Hero Memory, 追忆碎絮 = Memory Scrap,
+# 追忆游丝 = Memory Thread, 虚海请柬 = Void Sea Invitation (首领秘语 / Boss fısıltısının ödülü).
+# (✓) ekranda görüldü; (tlidb) tlidb.com/cn fısıltı listesinden; (?) İngilizcesinden tahmin.
+CN_NUM = r"(\d+(?:\.\d+)?)"
+# Windows'un Çince OCR'ı bazı karakterleri karıştırıyor (gerçek ekranlarda görüldü): 额外 -> "颜外" ya da "外",
+# 概率 -> "溉率", 英雄 -> "英雜", kalın beyaz "%" düşebiliyor ("…额外" + ayrı satırda "32").
+_EW = r"[额颜]?外"           # 额外
+_GL = r"[概溉]?率"           # 概率
+_HM = r"英.?追忆"            # 英雄追忆
+CN_EFFECT_PATTERNS = [
+    # (✓) 虚海宝藏有 20% 概率额外掉落 17 枚英雄追忆
+    ("luck",   re.compile(CN_NUM + "%" + _GL + _EW + "掉落" + CN_NUM + r"\D{0,2}" + _HM),
+               lambda m: _f(m.group(1)) / 100 * _f(m.group(2))),
+    # (✓) 虚海宝藏基础掉落中，掉落英雄追忆的概率提升 112%
+    ("appear", re.compile("掉落" + _HM + "的" + _GL + r"提升\+?" + CN_NUM + "%?"), lambda m: _f(m.group(1))),
+    # (✓) 虚海宝藏基础掉落中，英雄追忆的掉落数量额外 +32%
+    ("memQty", re.compile(_HM + "的掉落数量" + _EW + r"\+?" + CN_NUM + "%?"), lambda m: _f(m.group(1))),
+    # (✓) 虚海宝藏额外掉落 16 枚英雄追忆
+    ("flat",   re.compile(_EW + "掉落" + CN_NUM + r"\D{0,2}" + _HM), lambda m: _f(m.group(1))),
+    # (?) kopyalanma: "…有 3% 概率…复制 …"
+    ("rep",    re.compile(CN_NUM + "%" + _GL + r"\D{0,12}复制\D{0,3}" + CN_NUM),
+               lambda m: _f(m.group(1)) / 100 * _f(m.group(2))),
+    # (tlidb) Drop Rarity: "虚海宝藏的 掉落稀有度+25%" (稀有 tek başına kalite adı; "稀有度" gerekli)
+    ("rarity", re.compile(r"稀有度\D{0,4}?\+?" + CN_NUM + "%"), lambda m: _f(m.group(1))),
+    # (tlidb) base drop quantity: "虚海宝藏的基础掉落数量 +9%" (英雄追忆/追忆游丝 "的掉落数量" ile karışmaz)
+    ("baseQ",  re.compile(r"基础掉落数量\D{0,3}?\+?" + CN_NUM + "%"), lambda m: _f(m.group(1))),
+    # (tlidb) Treasure Drop Quantity: "虚海宝藏的掉落数量 +14%"
+    ("tQty",   re.compile(r"虚海宝藏(?:的)?掉落数量\D{0,3}?\+?" + CN_NUM + "%"), lambda m: _f(m.group(1))),
+    # (✓) kırmızıya katkısı yok: 追忆碎絮 (Scrap), 追忆游丝 (Thread), 虚海请柬 (Invitation)
+    ("none",   re.compile(r"追忆碎絮|追忆游丝|请柬"), lambda m: 0.0),
+]
+CJK_RX = re.compile(r"[一-鿿]")
+
+
+def squash_cn(text):
+    """Çince satır: boşlukları ve tam genişlikli işaretleri ayıkla ("２０％" -> "20%", "，" -> ",")."""
+    text = text.translate(str.maketrans("０１２３４５６７８９％＋，．：", "0123456789%+,.:"))
+    return re.sub(r"\s+", "", text)
+
+
 EFFECT_NAMES = {
     "appear": "Appear chance", "memQty": "Memory quantity", "flat": "Flat extra",
     "luck": "Lucky extra", "baseQ": "Base quantity", "tQty": "Treasure quantity",
@@ -55,7 +96,7 @@ EFFECT_NAMES = {
 }
 ARM_ONLY = {"appear", "memQty", "flat", "luck"}
 WON_ONLY = {"rarity", "tQty"}
-SIDE_LABEL = {"arm": "Armament", "won": "Wonder", "wea": "Wealth", "?": "?"}
+SIDE_LABEL = {"arm": "Armament", "won": "Wonder", "wea": "Wealth", "boss": "Boss", "?": "?"}
 POS_NAME = {1: ["middle"], 2: ["left", "right"], 3: ["left", "middle", "right"]}
 
 # Doğrulanmış değer değil, dengeli tahmin. Taban 3 / üs 1 sabit ek memory'yi aşırı değerli gösterip
@@ -90,8 +131,11 @@ def clean(text):
 def parse_effects(text):
     """Bir metinden bulunan etkiler: [(anahtar, değer, kaynak metin)]."""
     text = clean(text)
+    patterns = EFFECT_PATTERNS
+    if CJK_RX.search(text):                    # Çince istemci
+        text, patterns = squash_cn(text), CN_EFFECT_PATTERNS
     found, used = [], []
-    for key, rx, val in EFFECT_PATTERNS:
+    for key, rx, val in patterns:
         for m in rx.finditer(text):
             if any(m.start() < e and s < m.end() for s, e in used):
                 continue
@@ -263,11 +307,44 @@ def recommend(picked, cards, s):
 # Ekran okuma
 # --------------------------------------------------------------------------- #
 HEAD_RX = re.compile(r"^\W*whisper\s*of\s*(armament|wonder|wealth)\W*$", re.I)   # kart başlığı tek başına durur
-FLAME_RX = re.compile(r"put\s*in\s*void\s*sea|void\s*sea\s*flames", re.I)
+FLAME_RX = re.compile(r"put\s*in\s*void\s*sea|void\s*sea\s*flames|请放入虚海|虚海夜火", re.I)
 # "After defeating Pirates, a Whisper of X of Rare quality…" — seçili alev (OCR "Whisperof_Wonder" gibi okuyabilir)
 SEL_RX = re.compile(r"whisper[\W_]*of[\W_]*(arm\w*|won\w*|wealth)", re.I)
 SIDE_OF = {"armament": "arm", "wonder": "won", "wealth": "wea"}
 OWNED_RX = re.compile(r"(\d)\s*/\s*6\s*$")   # "4 / 6" ("14 / 6" okunsa da son rakam)
+# Çince: kart başlıkları 军械秘语 (Armament) / 奇珍秘语 (Wonder) / 财富秘语 (Wealth) / 首领秘语 (Boss: İngilizce
+# istemcide henüz yok; ödülü 虚海请柬, kırmızıya katkısı yok). Alev yazısı: "击败虚海之子后，可选的封印秘语必定
+# 出现一个 奇珍秘语，且品质至少为 稀有" (mavi alevde kalite kısmı yok). tlidb.com/cn/Void_Sea_Flame'deki
+# diğer biçimler: "…中至少有2个为 X秘语", "…中至少有一个优质的 X秘语", "击败虚海之子后，X秘语的品质至少为 魔法",
+# "…且品质为传奇". Kaliteler: 普通 < 魔法 < 稀有 < 传奇 (İngilizcede Normal < Magic < Rare < Epic).
+CN_SIDE = {"军械": "arm", "奇珍": "won", "财富": "wea", "首领": "boss"}
+CN_HEAD_RX = re.compile(r"^\W*(军械|奇珍|财富|首领)秘语\W*$")
+CN_SEL_RX = re.compile(r"(?:出现一个|有2个为|有一个(?:优质|珍贵)的|击败虚海之子后,?)(军械|奇珍|财富|首领)秘语")
+CN_QUAL = {"普通": 0, "魔法": 1, "稀有": 2, "传奇": 3, "史诗": 3}
+CN_QUAL_RX = re.compile(r"品质(?:至少)?为(普通|魔法|稀有|传奇|史诗)")
+
+
+def head_side(text):
+    """Kart başlığı satırıysa türü ("arm"/"won"/"wea"/"boss"), değilse None."""
+    m = HEAD_RX.search(text)
+    if m:
+        return SIDE_OF[m.group(1).lower()]
+    s = squash_cn(text)
+    m = CN_HEAD_RX.search(s)
+    if m:
+        return CN_SIDE[m.group(1)]
+    # OCR başlığı bozuk okuyabiliyor ("军秘语`", "一丿〕奇珍秘语", "，《财富秘语"): kısa, rakamsız, "秘语" ile
+    # biten satırda tür karakterlerinden birine bak
+    if s.rstrip("`'\".,、;:!?)）》〕0").endswith("秘语") and len(s) <= 9 and not re.search(r"\d|封印", s):
+        return _cn_side_chars(s)
+    return None
+
+
+def _cn_side_chars(s):
+    for chars, side in (("军械槭", "arm"), ("奇珍", "won"), ("财富", "wea"), ("首领", "boss")):
+        if any(c in s for c in chars):
+            return side
+    return None
 
 
 def grab(monitor_index=1):
@@ -276,9 +353,29 @@ def grab(monitor_index=1):
     return grab_screen(monitor_index)
 
 
+# Oyunun dili ekrandan anlaşılır: önce son işe yarayan dil denenir, ekranda bir şey bulunamazsa diğeri.
+# Çince için Windows'ta "zh-Hans" OCR dil paketi kurulu olmalı (Çince Windows'ta hazır gelir).
+OCR_LANG = "en"
+_ZH_TAG = []
+
+
+def zh_ocr_tag():
+    """Kurulu Çince (Basitleştirilmiş) Windows OCR dilinin etiketi ya da None."""
+    if not _ZH_TAG:
+        tag = None
+        try:
+            from winrt.windows.media.ocr import OcrEngine
+            tags = [l.language_tag for l in OcrEngine.available_recognizer_languages]
+            tag = next((t for t in tags if t.lower().startswith(("zh-hans", "zh-cn"))), None)
+        except Exception:
+            pass
+        _ZH_TAG.append(tag)
+    return _ZH_TAG[0]
+
+
 def _ocr_winocr(img):
     import winocr
-    res = asyncio.run(winocr.recognize_pil(img, "en"))
+    res = asyncio.run(winocr.recognize_pil(img, OCR_LANG))
     out = []
     for line in res.lines:
         rs = [w.bounding_rect for w in line.words]
@@ -327,11 +424,10 @@ def read_screen(lines, width):
     main = [l for l in lines if l[1] < panel_x]
     panel = [l for l in lines if l[1] >= panel_x]
 
-    heads = sorted(((SIDE_OF[HEAD_RX.search(t).group(1).lower()], x, y) for t, x, y in main if HEAD_RX.search(t)),
-                   key=lambda h: h[1])
+    heads = sorted(((head_side(t), x, y) for t, x, y in main if head_side(t)), key=lambda h: h[1])
     texts = [[] for _ in heads]
     for t, x, y in main:
-        if HEAD_RX.search(t):
+        if head_side(t):
             continue
         above = [i for i, h in enumerate(heads) if h[2] < y]
         if not above:
@@ -375,11 +471,14 @@ def read_owned(img):
         if m:
             owned_n = int(m.group(1))
     text = " ".join(t for t in lines if not OWNED_RX.search(t))
-    text = re.sub(r"(?<!\S)[^\d\s+%](?!\S)", " ", text)   # tek karakterlik ikon çöpleri
+    if not CJK_RX.search(text):          # Çincede tek karakter = tek kelime olabilir: o zaman dokunma
+        text = re.sub(r"(?<!\S)[^\d\s+%](?!\S)", " ", text)   # tek karakterlik ikon çöpleri
     return parse_effects(text), owned_n
 
 
 def _side_of_word(word):
+    if word in CN_SIDE:
+        return CN_SIDE[word]
     w = word.lower()
     return "arm" if w.startswith("arm") else "won" if w.startswith("won") else "wea"
 
@@ -393,6 +492,12 @@ def read_selected_tier(lines, width):
     m = QUAL_RX.search(main)
     if m:
         return TIER_NAMES.index(m.group(1).capitalize())
+    cn = squash_cn(main)
+    m = CN_QUAL_RX.search(cn)
+    if m:
+        return CN_QUAL[m.group(1)]
+    if CN_SEL_RX.search(cn):                 # Çince mavi alev: tür garanti, kalite yazmıyor
+        return 0
     # mavi alev: "a Whisper of Armament is guaranteed…" — kalite yazmaz, sadece tür garanti
     if re.search(r"whisper[\W_]*of[\W_]*\w+[\W_]*is[\W_]*guarant", main, re.I):
         return 0
@@ -403,10 +508,10 @@ def read_selected_flame(img, lines):
     """Void Sea Seal ekranında seçili alevin türü. Renkli (camgöbeği) yazı gri tonlamada
     kaybolabildiği için bulunamazsa o satır renkli ve büyütülmüş olarak yeniden okunur."""
     main = " ".join(t for t, x, y in lines if x < img.width * 0.80)
-    m = SEL_RX.search(main)
+    m = SEL_RX.search(main) or CN_SEL_RX.search(squash_cn(main))
     if m:
         return _side_of_word(m.group(1))
-    after = [(x, y) for t, x, y in lines if re.search(r"defeating\s*pirates", t, re.I)]
+    after = [(x, y) for t, x, y in lines if re.search(r"defeating\s*pirates", t, re.I) or "击败虚海" in squash_cn(t)]
     if not after:
         return None
     x, y = after[0]
@@ -418,12 +523,24 @@ def read_selected_flame(img, lines):
         txt = " ".join(t for t, *_ in _ocr_winocr(crop))
     except ImportError:
         txt = " ".join(t for t, *_ in _ocr_tesseract(crop))
-    m = SEL_RX.search(txt)
+    m = SEL_RX.search(txt) or CN_SEL_RX.search(squash_cn(txt))
     return _side_of_word(m.group(1)) if m else None
 
 
 NEED_RX = re.compile(r"need\s*(\d)\s*more\b.*whisper", re.I)   # "Sea\ Whisper" gibi bozuk okunabiliyor
+CN_NEED_RX = re.compile(r"还需要获得(\d)条封印秘语")              # 还需要获得 3 条封印秘语才能开启虚海终港
 TERMINAL_RX = re.compile(r"\bswitch\b|select\s*a\s*seal|void\s*sea\s*terminal", re.I)
+CN_TERMINAL_RX = re.compile(r"切换|请选择一条封印秘语|虚海终港")
+SWITCH_RX = re.compile(r"\W*(?:switch|切换)\W*", re.I)
+
+
+def is_terminal(text):
+    return bool(TERMINAL_RX.search(text) or CN_TERMINAL_RX.search(squash_cn(text)))
+
+
+def need_count(text):
+    m = NEED_RX.search(text) or CN_NEED_RX.search(squash_cn(text))
+    return int(m.group(1)) if m else None
 NUM_LINE_RX = re.compile(r"^\W*(\d+(?:[.,]\d+)?)\W*$")
 
 
@@ -436,6 +553,9 @@ def _ocr_any(img):
 
 def _side_of_heading(text):
     """Bozuk okunmuş başlıktan tür: 'Whispä of Annament' -> arm, "his of %'üonder" -> won."""
+    cn = squash_cn(text)
+    if "秘语" in cn:
+        return _cn_side_chars(cn)
     t = text.lower()
     if re.search(r"arm|ann?am|mament|amen", t):
         return "arm"
@@ -451,7 +571,7 @@ def _fill_numbers(text, nums):
     'additional Hero' öncesine sırayla eksik rakamları yerleştirir."""
     nums = list(nums)
     out, last = [], 0
-    for m in re.finditer(r"%|additional\s*hero", text, re.I):
+    for m in re.finditer(r"%|additional\s*hero|[枚个]\s*(?:英雄|追忆|虚海)", text, re.I):
         before = text[:m.start()].rstrip()
         out.append(text[last:m.start()])
         if nums and not (before and before[-1].isdigit()):
@@ -463,6 +583,39 @@ def _fill_numbers(text, nums):
     if nums and not re.match(r"\W*\d", text):
         text = f"{nums[0]} {text}"
     return text
+
+
+def _cn_numbers(text, whites, more_whites):
+    """Çince kart: kalın beyaz rakamlar renkli okumada kısmen düşüyor ("20%" -> "0%", "17 枚" -> "7 枚").
+    Ayrıca okunan beyaz rakamlarla tamamla: kısmi rakam, sonu ona uyan beyaz sayıyla değişir; rakamsız
+    kalan "%" / "枚英雄" yerlerine kalan beyaz sayılar konur. Hâlâ rakam eksikse (seçili olmayan gri kartta
+    rakam daha soluk) beyaz eşiği düşürülerek tekrar okunur."""
+    text = squash_cn(text)          # "％" -> "%", "枚 英 雄" -> "枚英雄": yer işaretleri bulunabilsin
+
+    def fix(ws):
+        used = [False] * len(ws)
+
+        def rep(m):
+            d = m.group(0)
+            for k, w in enumerate(ws):
+                if not used[k] and (w == d or (len(w) > len(d) and w.endswith(d))):
+                    used[k] = True
+                    return w
+            return d
+        t = re.sub(r"\d+(?:\.\d+)?", rep, text)
+        rest = [w for k, w in enumerate(ws) if not used[k]]
+        return _fill_numbers(t, rest) if rest else t
+
+    def missing(t):
+        return bool(re.search(r"(?<!\d)%|(?<!\d)[枚个]英", squash_cn(t)))
+    out = fix(whites)
+    for thr in (180, 160, 140):
+        if not missing(out):
+            break
+        ws = more_whites(thr)
+        if len(ws) > len(whites):
+            whites, out = ws, fix(ws)
+    return out
 
 
 def _reading_order(lines, tol=28):
@@ -503,7 +656,7 @@ def read_cards_color(img, lines):
     import numpy as np
     from PIL import Image
     W, H = img.size
-    sw = [(x, y) for t, x, y in lines if re.fullmatch(r"\W*switch\W*", t, re.I)]
+    sw = [(x, y) for t, x, y in lines if SWITCH_RX.fullmatch(squash_cn(t))]
     cx0 = sw[0][0] if sw else W / 2
     # arayüz ölçeği: sahne ekranın dikey ortasına göre çiziliyor; varsayılan ölçekte Switch merkezin 0.25·H
     # üstünde. Daha büyük ölçekte (ör. 21:9 ekranda %7-8) kartlar da birbirinden o oranda uzak.
@@ -523,8 +676,17 @@ def read_cards_color(img, lines):
         head = ""
         for s in (2 * f, 3 * f):
             col = [t for t, *_ in _reading_order(_ocr_any(crop.resize((int(crop.width * s), int(crop.height * s)))))]
-            head = next((t for t in col if re.search(r"of", t, re.I) and _side_of_heading(t)), "") or head
+            head = next((t for t in col if (re.search(r"of", t, re.I) or "秘语" in squash_cn(t))
+                         and _side_of_heading(t)), "") or head
             body = [t for t in col if t != head]
+            if CJK_RX.search(" ".join(body)):
+                # Çince: rakamlar satır içinde kalsın ("…额外" + ayrı satırda "32"), kısmi okunanlar beyaz rakamla tamamlansın
+                text = " ".join(body)
+                effs = parse_effects(_cn_numbers(text, white_nums,
+                                                 lambda thr: _white_numbers(crop, np, Image, thr=thr, f=f)))
+                if effs:
+                    break
+                continue
             standalone = [NUM_LINE_RX.match(t).group(1) for t in body if NUM_LINE_RX.match(t)]
             text = " ".join(t for t in body if not NUM_LINE_RX.match(t))
             present = re.findall(r"\d+(?:[.,]\d+)?", text)
@@ -557,18 +719,21 @@ def analyze(img):
     owned_n = owned_n2 if owned_n2 is not None else owned_n
     if owned_n is None and owned:
         owned_n = len(owned)
-    flame = any(FLAME_RX.search(t) for t, x, y in lines if x < img.width * 0.80)
+    flame = any(FLAME_RX.search(t) or FLAME_RX.search(squash_cn(t)) for t, x, y in lines if x < img.width * 0.80)
     # Terminalin özet ekranı: "Need 2 more Seal Whisper(s) to open the Void Sea Terminal" — kart yok
-    need = next((int(m.group(1)) for t, x, y in lines if (m := NEED_RX.search(t))), None)
+    need = next((n for t, x, y in lines if (n := need_count(t)) is not None), None)
     if not flame and need is not None:
         return {"mode": "overview", "cards": [], "owned": owned, "owned_n": owned_n, "selected": None,
-                "need": need}
-    if not flame and any(TERMINAL_RX.search(t) for t, x, y in lines if x < img.width * 0.80):
+                "need": need, "cjk": cn_screen(lines)}
+    if not flame and any(is_terminal(t) for t, x, y in lines if x < img.width * 0.80):
         colored = read_cards_color(img, lines)
-        if sum(1 for _, e, _ in colored if e) >= sum(1 for _, e, _ in cards if e):
+        # rakamı düşmüş etki (Çincede "0% 概率…" -> Lucky extra 0) okunmuş sayılmasın
+        good = lambda cs: sum(1 for _, e, _ in cs if e and all(v > 0 or k == "none" for k, v, *_ in e))
+        if good(colored) >= good(cards):
             cards = colored
     res = {"mode": "flame" if flame else "cards", "cards": [] if flame else cards, "owned": owned,
-           "owned_n": owned_n, "selected": read_selected_flame(img, lines) if flame else None, "tiers": {}}
+           "owned_n": owned_n, "selected": read_selected_flame(img, lines) if flame else None, "tiers": {},
+           "cjk": cn_screen(lines)}
     if flame:
         try:
             cols = read_flame_colors(img)
@@ -578,12 +743,45 @@ def analyze(img):
     return res
 
 
+CN_SCREEN_RX = re.compile(r"秘语|虚海|封印|切换")
+
+
+def cn_screen(lines):
+    """Ekranda oyunun Çince kelimeleri var mı (Çince OCR İngilizce ekranda rastgele Çince karakter de üretebiliyor)."""
+    return any(CN_SCREEN_RX.search(squash_cn(t)) for t, *_ in lines)
+
+
+def _useful(res, lang="en"):
+    # Çince OCR İngilizce ekrandan da Latin harfli bir şeyler çıkarabiliyor: Çince sonuç ancak ekranda
+    # Çince karakter varsa kabul edilir (İngilizce oynayan ama Çince paketi kurulu olanlar için)
+    if lang != "en" and not res.get("cjk", True):
+        return False
+    return res["mode"] in ("flame", "overview") or bool(res["cards"]) or bool(res["owned"])
+
+
+def analyze_any(img):
+    """analyze() oyunun diliyle: önce son işe yarayan OCR dili, sonuç boşsa diğer kurulu dil (en / zh)."""
+    global OCR_LANG
+    langs = [OCR_LANG] + [l for l in ("en", zh_ocr_tag()) if l and l != OCR_LANG]
+    first = None
+    for lang in langs:
+        OCR_LANG = lang
+        res = analyze(img)
+        if _useful(res, lang):
+            return res
+        first = first or res
+    OCR_LANG = langs[0]
+    return first
+
+
 def flame_tiers(cols, selected, sel_tier):
     """Alevlerin garanti kademesi {tür: kademe}. Seçili alevin türü ve kademesi yazıdan; köşesi, rengi
     ortadaki daireyle eşleşen köşe. Diğer köşe diğer türdür, kademesi kendi renginden."""
     tier = lambda c: FLAME_COLOR_TIER.get(c) if c else None
     left, right, center = cols.get("left"), cols.get("right"), cols.get("center")
     out = {}
+    if selected == "boss":
+        return out          # Çince: alevlerden biri Boss (首领) fısıltısı garanti ediyor; diğer köşenin türü bilinmiyor
     if selected not in ("arm", "won"):
         # seçili alev yazıdan okunamadı: eski varsayım (sol Armament, sağ Wonder)
         for side, c in (("arm", left), ("won", right)):
@@ -857,6 +1055,110 @@ def describe_learned(info):
     if info["red"] and abs(info["k"] - DEFAULTS["vs_k"]) >= 0.3:
         parts.append(f"rarity exponent {info['k']:g}")
     return "From your log: " + "; ".join(parts) if parts else ""
+
+
+SHORT_NAMES = {"appear": "Appear", "memQty": "Mem qty", "flat": "Flat", "luck": "Lucky", "baseQ": "Base qty",
+               "tQty": "Treasure", "rarity": "Rarity", "rep": "Replication", "none": "None"}
+COMPARE_MIN_RUNS = 5     # bir türün olduğu ve olmadığı koşulardan en az bu kadar yoksa sonuç "az veri"
+
+
+COMPARE_MIN_CONTRAST = 3     # türün olduğu ya da olmadığı koşu bundan azsa etki ayrılamaz: "Insufficient"
+RED_MIN_TOTAL = 5            # kırmızı karşılaştırması için kayıtta en az bu kadar kırmızı olmalı
+COMBO_MIN_RUNS = 3           # bir kombinasyon en az bu kadar koşuda görüldüyse karşılaştırılır
+BOOTSTRAP_N = 40             # güven aralığı için yeniden örnekleme sayısı
+
+
+def valid_runs(runs):
+    """Karşılaştırmaya giren koşular: fit_model'le aynı kural (fısıltısı okunmuş, sayımı yarıda kalmamış).
+    -> (geçerli koşular, [(koşu, neden dışarıda)])"""
+    ok, out = [], []
+    for r in runs:
+        if not run_whispers(r["effects"]):
+            out.append((r, "whispers not read"))
+        elif not r.get("tracked", True):
+            out.append((r, "run still in progress or the app was closed during the run"))
+        else:
+            ok.append(r)
+    return ok, out
+
+
+def _effect(k, typical, s):
+    return breakdown([(k, typical)], s)[0] - breakdown([], s)[0]
+
+
+def whisper_stats(runs, settings, bootstrap=True):
+    """Fısıltı türlerinin karşılaştırması (sadece geçerli koşular):
+    [{key, n_with, n_without, avg_with, avg_without, red_with, red_without, typical, model, lo, hi, confidence}]
+    avg_* / red_*: o türün olduğu / olmadığı koşulardaki ortalama memory / kırmızı (türler birlikte
+    seçildiği için tek başına yanıltabilir). model: öğrenilen modele göre o türden tek bir tipik fısıltının
+    (kayıttaki ortanca değer) boş bir koşuya kattığı memory; model türleri birbirinden ayırır.
+    lo/hi: koşular yeniden örneklenip model tekrar kurulunca bu tahminin %10–%90 aralığı.
+    confidence: Insufficient / Low / Preliminary / Good. Rarity memory sayısını değiştirmez (model 0)."""
+    done, _ = valid_runs(runs)
+    s = model_settings(settings)
+    rows = []
+    for k in ("appear", "memQty", "flat", "luck", "baseQ", "tQty", "rarity"):
+        vals, w, wo = [], [], []
+        for r in done:
+            wh = [v for kk, v in run_whispers(r["effects"]) if kk == k]
+            vals += wh
+            (w if wh else wo).append(r)
+        if not vals:
+            continue
+        avg = lambda rs, f: sum(f(r) for r in rs) / len(rs) if rs else None
+        rows.append({"key": k, "n_with": len(w), "n_without": len(wo),
+                     "avg_with": avg(w, lambda r: r["memories"]), "avg_without": avg(wo, lambda r: r["memories"]),
+                     "red_with": avg(w, lambda r: r["red"]), "red_without": avg(wo, lambda r: r["red"]),
+                     "typical": sorted(vals)[len(vals) // 2]})
+    for d in rows:
+        d["model"] = _effect(d["key"], d["typical"], s)
+        d["lo"] = d["hi"] = d["model"]
+    if bootstrap and len(done) >= FIT_MIN_RUNS:
+        import random
+        rnd = random.Random(1)                     # aynı kayıtta hep aynı sonuç
+        s0 = {k: float(settings.get(k, v)) for k, v in DEFAULTS.items()}
+        samples = {d["key"]: [] for d in rows}
+        for _ in range(BOOTSTRAP_N):
+            info = fit_model([rnd.choice(done) for _ in done], s0)
+            sb = dict(s0, fit=info) if info["active"] else s0
+            for d in rows:
+                samples[d["key"]].append(_effect(d["key"], d["typical"], sb))
+        for d in rows:
+            xs = sorted(samples[d["key"]])
+            d["lo"], d["hi"] = xs[len(xs) // 10], xs[(len(xs) * 9) // 10]
+    for d in rows:
+        n_min = min(d["n_with"], d["n_without"])
+        width, est = d["hi"] - d["lo"], abs(d["model"])
+        if d["key"] == "rarity":
+            d["confidence"] = None                  # memory'ye etkisi yok; kırmızı tarafı ayrı
+        elif n_min < COMPARE_MIN_CONTRAST:
+            d["confidence"] = "Insufficient"
+        elif d["lo"] <= 0.05 or width > est:
+            d["confidence"] = "Low"
+        elif n_min >= 10 and width <= 0.5 * est:
+            d["confidence"] = "Good"
+        else:
+            d["confidence"] = "Preliminary"
+    return sorted(rows, key=lambda d: (d["confidence"] in (None, "Insufficient"), -d["model"]))
+
+
+def combo_stats(runs):
+    """Aynı tür kombinasyonu (değerler hariç, adetler dahil) en az COMBO_MIN_RUNS koşuda görüldüyse:
+    [(kısa yazım, koşu sayısı, ortalama memory, toplam kırmızı)], ortalamaya göre."""
+    done, _ = valid_runs(runs)
+    grp = {}
+    for r in done:
+        cnt = {}
+        for k, _v in run_whispers(r["effects"]):
+            cnt[k] = cnt.get(k, 0) + 1
+        key = tuple(sorted(cnt.items()))
+        grp.setdefault(key, []).append(r)
+    out = []
+    for key, rs in grp.items():
+        if len(rs) >= COMBO_MIN_RUNS:
+            name = " + ".join(SHORT_NAMES.get(k, k) + (f" ×{n}" if n > 1 else "") for k, n in key)
+            out.append((name, len(rs), sum(r["memories"] for r in rs) / len(rs), sum(r["red"] for r in rs)))
+    return sorted(out, key=lambda c: -c[2])
 
 
 # --------------------------------------------------------------------------- #
@@ -1224,7 +1526,8 @@ if __name__ == "__main__":
     if a.image:
         from PIL import Image
         im = Image.open(a.image).convert("RGB")
-        res = analyze(im)
+        res = analyze_any(im)
+        print(f"OCR dili: {OCR_LANG}")
         st = VoidSeaState(); st.on_analyze(res)
         print(f"Ekran: {res['mode']} · seçilmiş {res['owned_n']}/6: {describe(res['owned']) if res['owned'] else '-'}")
         if st.mode == "flame":

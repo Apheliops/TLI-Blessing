@@ -36,6 +36,13 @@ KNOWN = [
 ]
 EXCLUDED_WORDS = ("arcane", "arca ne")      # Flame Sand artık değerlendiriliyor
 
+# Çince istemci (众神所赐): isimler Windows'un Çince OCR'ıyla okunur (Tesseract'ta Çince yok).
+# Kaynak: oyuncunun ekran görüntüsü + tlidb.com/cn/Blessings_from_Gods; 至臻灰烬 tlidb.com/cn/Ultimate_Ember.
+CN_KNOWN = [("初火源质", FE), ("初火灵砂", "100200"), ("能量核心", "5080"), ("异界回响", "5028"),
+            ("至臻灰烬", "200030")]
+CN_WEDGE = {"传奇": "5250", "稀有": "5230", "魔法": "5220"}    # 升华之楔（…）= Transcendence Wedge (…)
+CN_EXCLUDED = ("奥秘", "绑定")                                  # 奥秘辉石 = Arcane Stone; 绑定 = Bound (tahmin)
+
 
 class OcrError(Exception):
     pass
@@ -281,6 +288,11 @@ def _read_price_once(im, cx, s, np, Image, pytesseract, lo, spread):
     spans = []
     gl = _split_glyphs(sub, np, spans)
     while len(gl) > 1 and spans[1][0] - spans[0][1] > 4.5 * s:
+        # …ama boyu diğer rakamlarla aynıysa atma: elmas kenarı rakamlardan kısa kalıyor. Bazı ekranlarda
+        # (Çince istemci) "1" rakamının iki yanı geniş kalıyor, "15" -> "5", "156" -> "56" okunuyordu.
+        ratio = gl[0].shape[0] / max(g.shape[0] for g in gl[1:])
+        if ratio >= 0.9 and _classify(*_glyph_vec(gl[0], np, Image), np)[0] is not None:
+            break
         gl, spans = gl[1:], spans[1:]
     if gl and spans:
         sub = sub[:, spans[0][0]:]
@@ -369,6 +381,60 @@ def match_item(text, item_names=None):
     return None, qty, False
 
 
+_ZH = []          # kurulu Çince OCR dili (önbellek)
+_LAST = {"cn": False}     # son okumada isimler Çinceydi: sonraki okumada önce Çince denensin
+
+
+def zh_ocr_tag():
+    if not _ZH:
+        tag = None
+        try:
+            from winrt.windows.media.ocr import OcrEngine
+            tags = [l.language_tag for l in OcrEngine.available_recognizer_languages]
+            tag = next((t for t in tags if t.lower().startswith(("zh-hans", "zh-cn"))), None)
+        except Exception:
+            pass
+        _ZH.append(tag)
+    return _ZH[0]
+
+
+def _read_name_cn(im, cx, s):
+    """Kartın adını Windows'un Çince OCR'ıyla okur (renkli, büyütülmüş)."""
+    import asyncio
+    import winocr
+    crop = im.crop((int(cx - 74 * s), int(232 * s), int(cx + 74 * s), int(325 * s)))
+    crop = crop.resize((crop.width * 3, crop.height * 3))
+    res = asyncio.run(winocr.recognize_pil(crop.convert("RGB"), zh_ocr_tag()))
+    return " ".join(l.text for l in res.lines)
+
+
+def match_item_cn(text):
+    """Çince ad -> (cid, adet, hariç_mi). "能量核心 X 10", "升华之楔（稀有） X 20", "奥秘辉石（大）"."""
+    t = re.sub(r"\s+", "", text.translate(str.maketrans("０１２３４５６７８９（）", "0123456789()")))
+    # adet: "X 20"; OCR "X"i ")(" diye okuyabiliyor -> sondaki sayı adet
+    m = re.search(r"[xX×]\s*(\d{1,4})", t) or re.search(r"(?<![\d.])(\d{1,4})$", t)
+    qty = int(m.group(1)) if m else 1
+    if any(w in t for w in CN_EXCLUDED):
+        return None, qty, True
+    if "升华" in t or "之楔" in t:
+        for word, cid in CN_WEDGE.items():
+            if word in t:
+                return cid, qty, False
+        return None, qty, False
+    for word, cid in CN_KNOWN:
+        if word in t or (len(word) == 4 and sum(c in t for c in word) >= 3):   # bir karakteri yanlış okunsa da
+            return cid, qty, False
+    return None, qty, False
+
+
+def _name_cn(im, cx, s):
+    try:
+        txt = _read_name_cn(im, cx, s)
+    except Exception:
+        return "", (None, 1, False)
+    return txt, match_item_cn(txt)
+
+
 CARD_TOP = 110        # kartın üst kenarı (1440p, yerinde dururken)
 
 
@@ -439,6 +505,8 @@ def read_offers(im, item_names=None):
     else:
         centers = [(CARD_X0 + CARD_DX * i) * s for i in range(N_CARDS)]
     out = []
+    cn = bool(zh_ocr_tag())          # Windows'ta Çince OCR kurulu mu
+    n_cn = 0                         # bu okumada Çince tanınan kart sayısı
     for i in range(N_CARDS):
         cx = centers[i]
         # dikey hizalama: kartın bulunan üst kenarına göre (yenileme animasyonu, farklı arayüz ölçeği)
@@ -453,7 +521,11 @@ def read_offers(im, item_names=None):
         if not sold:
             # eşya tanınana kadar (ve adet "x20" gibi okunana kadar) gevşek eşikleri de dene
             best = None
-            for lo, sp in NAME_THRESHOLDS:
+            if cn and _LAST["cn"]:                  # Çince istemci: önce Çince OCR (Tesseract boşuna uğraşmasın)
+                txt, got = _name_cn(cim, cx, s)
+                if got[0] or got[2]:
+                    best = (txt, got)
+            for lo, sp in (() if best else NAME_THRESHOLDS):
                 txt = _read_name(cim, cx, s, np, Image, pytesseract, lo, sp)
                 got = match_item(txt, item_names)
                 has_qty = bool(re.search(r"x\s?\d", txt.lower()))
@@ -462,6 +534,13 @@ def read_offers(im, item_names=None):
                 if (got[0] or got[2]) and has_qty:
                     best = (txt, got)
                     break
+            if cn and not (best[1][0] or best[1][2]):      # İngilizce tanınmadı: Çince istemci olabilir
+                txt, got = _name_cn(cim, cx, s)
+                if got[0] or got[2]:
+                    best = (txt, got)
+                    n_cn += 1
+            elif cn and _LAST["cn"] and re.search(r"[一-鿿]", best[0]):
+                n_cn += 1
             rec["text"] = best[0]
             try:  # kartın ikonu (küçük panelde göstermek için): yenileme animasyonunda kart kayabildiği
                 #     için kesit, kartın bulunan üst kenarına göre alınır
@@ -481,6 +560,8 @@ def read_offers(im, item_names=None):
                 elif rec["price"] is None:
                     rec["problem"] = "price not read: " + (rec["price_why"] or "unknown reason")
         out.append(rec)
+    if cn and any(not o["sold"] for o in out):
+        _LAST["cn"] = n_cn >= 3                    # sonraki okumada hangi dil önce denensin
     return out
 
 
