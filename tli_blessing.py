@@ -92,8 +92,8 @@ def latest_release():
 
 
 def install_update(zip_url, status=lambda s: None):
-    """Release zip'ini indirip program dosyalarının üstüne yazar. userdata\\ ve _yedek\\'e dokunmaz;
-    değişen her dosyanın eski hâli _yedek\\update-from-v<sürüm>\\ içine alınır.
+    """Release zip'ini indirip program dosyalarının üstüne yazar. userdata\\, _yedek\\ ve backup\\'a dokunmaz;
+    değişen her dosyanın eski hâli backup\\update-from-v<sürüm>\\ içine alınır (kullanıcı görüyor: İngilizce ad).
     -> requirements.txt değiştiyse True (yeni paket kurulmalı). İndirme/kontrol hatasında istisna fırlatır
     ve hiçbir dosyaya dokunulmaz; yazma ancak zip'in tamamı doğrulandıktan sonra başlar."""
     import io, shutil, urllib.request, zipfile
@@ -115,7 +115,7 @@ def install_update(zip_url, status=lambda s: None):
             _, _, rel = name.partition("/")            # zip'te tek üst klasör var (TLI-Blessing/)
             parts = rel.split("/")
             if (not rel or name.startswith("/") or ":" in rel or ".." in parts
-                    or parts[0].lower() in ("userdata", "_yedek", ".git")):
+                    or parts[0].lower() in ("userdata", "_yedek", "backup", ".git")):
                 raise ValueError(f"unexpected file in the update: {name}")
             files[rel] = z.read(info)
     if "tli_blessing.py" not in files:
@@ -124,7 +124,7 @@ def install_update(zip_url, status=lambda s: None):
         if rel.endswith(".py"):
             compile(b, rel, "exec")
     status("Installing…")
-    bak = os.path.join(APP_DIR, "_yedek", f"update-from-v{APP_VERSION}")
+    bak = os.path.join(APP_DIR, "backup", f"update-from-v{APP_VERSION}")
     reqs_changed = False
     for rel, b in files.items():
         dst = os.path.join(APP_DIR, *rel.split("/"))
@@ -2196,7 +2196,7 @@ def run_gui(start_hidden=False):
             return
         if not messagebox.askyesno(tr("Install update"),
                                    tr(f"Download and install {upd[0]} now?\n\nThe app will restart. Your settings and "
-                                   "run log (userdata folder) are not touched; the old files are kept in _yedek."),
+                                   "run log (userdata folder) are not touched; the old files are kept in the backup folder."),
                                    parent=root):
             return
         st["updating"] = True

@@ -169,7 +169,7 @@ Everything personal is stored in the `userdata` folder next to the app — it st
 
 When moving the app to another folder, copy `userdata` too.
 
-**Update check:** at startup (and every 6 hours) the app asks GitHub for the latest release number of this repository. Nothing about you or your data is sent. If a newer version exists, a "new version available" bar appears in the main window and a one-line notice on the overlay. **Install update** downloads the release zip from this repository's GitHub Releases, replaces the program files and restarts the app; the `userdata` folder is never touched and the replaced files are kept in `_yedek\update-from-v<old version>`. **Release page** opens the download page instead, if you prefer to update by hand. Turn the check off with **Check for updates** at the bottom of the main window.
+**Update check:** at startup (and every 6 hours) the app asks GitHub for the latest release number of this repository. Nothing about you or your data is sent. If a newer version exists, a "new version available" bar appears in the main window and a one-line notice on the overlay. **Install update** downloads the release zip from this repository's GitHub Releases, replaces the program files and restarts the app; the `userdata` folder is never touched and the replaced files are kept in `backup\update-from-v<old version>`. **Release page** opens the download page instead, if you prefer to update by hand. Turn the check off with **Check for updates** at the bottom of the main window.
 
 ## Troubleshooting
 

@@ -225,8 +225,8 @@ TEMPLATES_ZH = {
     "✔  {tag} installed — restarting…": "✔  {tag} 已安装 — 正在重启…",
     "✔  Installed. Restart the app with Start.bat ({e})": "✔  已安装。请用 Start.bat 重新启动程序（{e}）",
     "⚠  Update failed: {e} — use “Release page” to download it yourself.": "⚠  更新失败：{e} — 请使用“发布页面”自行下载。",
-    "Download and install {tag} now?\n\nThe app will restart. Your settings and run log (userdata folder) are not touched; the old files are kept in _yedek.":
-        "现在下载并安装 {tag} 吗？\n\n程序会重新启动。你的设置和记录（userdata 文件夹）不会改动；旧文件保存在 _yedek。",
+    "Download and install {tag} now?\n\nThe app will restart. Your settings and run log (userdata folder) are not touched; the old files are kept in the backup folder.":
+        "现在下载并安装 {tag} 吗？\n\n程序会重新启动。你的设置和记录（userdata 文件夹）不会改动；旧文件保存在 backup 文件夹。",
     "A Void Sea run is in progress. Finish the run first, then install the update.": "虚海正在进行中。请先完成这一次，再安装更新。",
     # log yardımı
     "Log file not found. Click “Select log…” and choose UE_game.log in <game folder>\\UE_game\\TorchLight\\Saved\\Logs.":
