@@ -59,7 +59,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.1"
+APP_VERSION = "6.2"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -878,6 +878,7 @@ def claim_single_instance(on_open):
 def run_gui(start_hidden=False):
     import tkinter as tk
     from tkinter import ttk, filedialog
+    import tkinter.font as tkfont
 
     if sys.platform == "win32":      # ekran yakalamada gerçek pikselleri al
         try:
@@ -1004,8 +1005,37 @@ def run_gui(start_hidden=False):
     tk.Label(head_l, text=tr("TLI Blessing Helper"), bg=BG, fg=FG, font=(F_NUM + " SemiBold", 15), anchor="w").pack(side="top", anchor="w")
     lbl_log = tk.Label(head_l, text="", bg=BG, fg=MUTED, font=(F_UI, 9, "bold"), anchor="w", justify="left")
     lbl_log.pack(fill="x")
-    lbl_path = tk.Label(head_l, text="", bg=BG, fg=MUTED, font=(F_UI, 8), anchor="w", justify="left", wraplength=520)
-    lbl_path.pack(fill="x")
+    # dosya yolu varsayılan olarak yıldızlı: ekran görüntüsü paylaşılınca klasör/kullanıcı adı görünmesin
+    path_row = tk.Frame(head_l, bg=BG)
+    path_row.pack(fill="x")
+    eye_mdl = "Segoe MDL2 Assets" in tkfont.families()
+    btn_eye = tk.Label(path_row, text="", bg=BG, fg=MUTED, cursor="hand2", padx=0,
+                       font=("Segoe MDL2 Assets", 9) if eye_mdl else (F_UI, 9))
+    btn_eye.pack(side="left", anchor="n", padx=(0, 6))
+    lbl_path = tk.Label(path_row, text="", bg=BG, fg=MUTED, font=(F_UI, 8), anchor="w", justify="left", wraplength=500)
+    lbl_path.pack(side="left", fill="x", expand=True)
+    path_txt = {"v": ""}
+
+    def show_path():
+        on = data["settings"].get("show_log_path", False)
+        p = path_txt["v"]
+        lbl_path.config(text=p if on or not p else "*" * 40)
+        if not p:
+            btn_eye.config(text="")
+        elif eye_mdl:
+            btn_eye.config(text="" if on else "")     # açık göz / üstü çizili göz
+        else:
+            btn_eye.config(text="👁" if on else "◌")
+
+    def toggle_path(_e=None):
+        data["settings"]["show_log_path"] = not data["settings"].get("show_log_path", False)
+        save_data(data)
+        show_path()
+
+    btn_eye.bind("<Button-1>", toggle_path)
+    btn_eye.bind("<Enter>", lambda e: btn_eye.config(fg=FG))
+    btn_eye.bind("<Leave>", lambda e: btn_eye.config(fg=MUTED))
+    show_path()
     # log bulunamadı / yazılmıyor: ne yapılacağını anlat (sorun yokken gizli)
     lbl_loghelp = tk.Label(logbox, text="", bg=BG, fg=WARN, font=(F_UI, 9), anchor="w", justify="left", wraplength=600)
 
@@ -2793,7 +2823,9 @@ def run_gui(start_hidden=False):
         if kind == "muted" and txt.startswith("Reading log… "):
             head_, path_ = "Reading log…", txt[len("Reading log… "):]
         lbl_log.config(text=tr(head_), fg={"good": GOOD, "bad": BAD}.get(kind, MUTED))
-        lbl_path.config(text=path_)
+        if path_ != path_txt["v"]:
+            path_txt["v"] = path_
+            show_path()
         update_loghelp(kind)
         update_dot()
         if time.time() - st.get("stale_chk", 0) > 60:     # fiyatın eskiyip eskimediği zamanla değişir

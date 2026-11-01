@@ -373,9 +373,15 @@ def zh_ocr_tag():
     return _ZH_TAG[0]
 
 
+async def _await(op):
+    # winocr bir WinRT IAsyncOperation döndürüyor; asyncio.run bunu yalnız Python 3.14'te kabul ediyor,
+    # eski Python'larda "a coroutine was expected" hatası veriyordu. Coroutine içine sarınca hepsinde çalışır.
+    return await op
+
+
 def _ocr_winocr(img):
     import winocr
-    res = asyncio.run(winocr.recognize_pil(img, OCR_LANG))
+    res = asyncio.run(_await(winocr.recognize_pil(img, OCR_LANG)))
     out = []
     for line in res.lines:
         rs = [w.bounding_rect for w in line.words]

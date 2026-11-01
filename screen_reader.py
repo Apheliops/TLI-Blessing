@@ -404,7 +404,9 @@ def _read_name_cn(im, cx, s):
     import winocr
     crop = im.crop((int(cx - 74 * s), int(232 * s), int(cx + 74 * s), int(325 * s)))
     crop = crop.resize((crop.width * 3, crop.height * 3))
-    res = asyncio.run(winocr.recognize_pil(crop.convert("RGB"), zh_ocr_tag()))
+    async def _await(op):     # IAsyncOperation coroutine değil: eski Python'larda asyncio.run kabul etmiyor
+        return await op
+    res = asyncio.run(_await(winocr.recognize_pil(crop.convert("RGB"), zh_ocr_tag())))
     return " ".join(l.text for l in res.lines)
 
 
