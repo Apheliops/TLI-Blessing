@@ -169,14 +169,22 @@ def app_icon(log_path):
 class Tray:
     """pystray ile sistem tepsisi simgesi. on_open/on_quit başka thread'den çağrılır."""
 
-    def __init__(self, image, on_open, on_quit):
+    def __init__(self, image, on_action, version=""):
+        """on_action(ad): "open" | "check_update" | "restart" | "folder" | "quit" (başka thread'den çağrılır)."""
         self.icon = None
         self.ok = False
         try:
             import pystray
+            act = lambda name: (lambda i, it: on_action(name))
             menu = pystray.Menu(
-                pystray.MenuItem("Open", lambda i, it: on_open(), default=True),
-                pystray.MenuItem("Quit", lambda i, it: on_quit()),
+                pystray.MenuItem("Open", act("open"), default=True),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Check for updates", act("check_update")),
+                pystray.MenuItem("Restart", act("restart")),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem(f"Version {version}", None, enabled=False),
+                pystray.MenuItem("Open the data folder", act("folder")),
+                pystray.MenuItem("Quit", act("quit")),
             )
             self.icon = pystray.Icon("tli_blessing", image, "TLI Blessing Helper", menu)
             self.icon.run_detached()

@@ -2848,6 +2848,36 @@ def run_gui(start_hidden=False):
                     elif v == "quit":
                         quit_app()
                         return False
+                    elif v == "restart":
+                        try:
+                            restart_app()          # yeni süreç bu süreç kapanınca açılır
+                        except Exception as e:
+                            report_error("Restart", f"could not restart: {e}")
+                        else:
+                            quit_app()
+                            return False
+                    elif v == "check_update":      # elle kontrol: "bir daha gösterme" dense bile göster
+                        threading.Thread(target=lambda: q.put(("update_manual", latest_release())), daemon=True).start()
+                    elif v == "folder":
+                        try:
+                            os.makedirs(USER_DIR, exist_ok=True)
+                            os.startfile(USER_DIR)
+                        except Exception:
+                            pass
+                elif k == "update_manual":
+                    tray = tray_obj["t"]
+                    if v is None:
+                        if tray is not None:
+                            tray.notify(tr("Could not check for updates. Check your internet connection."))
+                    elif version_tuple(v[0]) > version_tuple(APP_VERSION):
+                        data["settings"].pop("update_dismissed", None)
+                        st["update_notified"] = v[0]       # pencere zaten açılıyor: ayrıca bildirim gerekmez
+                        show_update(v)
+                        root.deiconify()
+                        root.lift()
+                    elif tray is not None:
+                        tray.notify(tr(f"You have the latest version (v{APP_VERSION})."))
+                    continue
                 elif k == "offers":
                     on_offers(v)
                 elif k == "pic":
@@ -2948,7 +2978,7 @@ def run_gui(start_hidden=False):
                 root.iconphoto(True, st["win_icon"])
             except Exception:
                 pass
-            tray_obj["t"] = TR.Tray(icon_img, lambda: q.put(("tray", "open")), lambda: q.put(("tray", "quit")))
+            tray_obj["t"] = TR.Tray(icon_img, lambda a: q.put(("tray", a)), APP_VERSION)
     except Exception:
         pass
 

@@ -223,6 +223,8 @@ TEMPLATES_ZH = {
     "⬆  A new version is available: {tag}  (you have v{v})": "⬆  有新版本：{tag}  （当前 v{v}）",
     "⬆ Update {tag} available — click to open": "⬆ 有更新 {tag} — 点击打开",
     "Version {tag} is available. Open the app and press “Install update”.": "有新版本 {tag}。请打开程序并点击“安装更新”。",
+    "You have the latest version (v{v}).": "已是最新版本（v{v}）。",
+    "Could not check for updates. Check your internet connection.": "无法检查更新。请检查网络连接。",
     "⬆  {tag}: {s}": "⬆  {tag}：{s}", "Downloading…": "正在下载…", "Checking…": "正在检查…", "Installing…": "正在安装…",
     "✔  {tag} installed — restarting…": "✔  {tag} 已安装 — 正在重启…",
     "✔  Installed. Restart the app with Start.bat ({e})": "✔  已安装。请用 Start.bat 重新启动程序（{e}）",
