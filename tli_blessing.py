@@ -59,7 +59,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.2"
+APP_VERSION = "6.3"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -747,6 +747,24 @@ class Engine:
 # --------------------------------------------------------------------------- #
 # Log takipçisi (arka plan iş parçacığı)
 # --------------------------------------------------------------------------- #
+# "Enable Log" kapalıyken oyun yine log yazıyor ama sadece temel satırları: bölge geçişi, eşya
+# hareketi, terminal fısıltıları yok. Açıkken ilk bölge satırı oyun açıldıktan ~20 sn sonra geliyor.
+LOG_DETAIL_MARKERS = (b"EnterLevel(", b"ItemChange@")
+LOG_DETAIL_WAIT = 120          # log'un ilk satırından bu kadar sn sonra hâlâ yoksa: ayrıntı kapalı
+LOG_TS_RX = re.compile(rb"^\[(\d{4})\.(\d\d)\.(\d\d)-(\d\d)\.(\d\d)\.(\d\d)")
+
+
+def log_ts(raw):
+    """Log satırının zaman damgası (sn); damgasız satırda None."""
+    m = LOG_TS_RX.match(raw)
+    if not m:
+        return None
+    try:
+        return datetime(*map(int, m.groups())).timestamp()
+    except ValueError:
+        return None
+
+
 class Tailer(threading.Thread):
     def __init__(self, path, out_q):
         super().__init__(daemon=True)
@@ -758,6 +776,7 @@ class Tailer(threading.Thread):
         pos, buf, size_prev = 0, b"", 0
         nlines = 0
         first = True
+        t_first, detail = None, False
         while not self.stop_flag:
             try:
                 size = os.path.getsize(self.path)
@@ -769,6 +788,7 @@ class Tailer(threading.Thread):
                 pos, buf = 0, b""
                 parser.reset()
                 nlines = 0
+                t_first, detail = None, False
                 self.q.put(("newlog", None))
             size_prev = size
             if size > pos:
@@ -785,12 +805,19 @@ class Tailer(threading.Thread):
                 lines = buf.split(b"\n")
                 buf = lines.pop()
                 for raw in lines:
+                    if not detail and any(k in raw for k in LOG_DETAIL_MARKERS):
+                        detail = True
                     try:
                         parser.feed(raw.decode("utf-8", "replace").lstrip("﻿"))
                     except Exception:
                         pass
+                if t_first is None:
+                    t_first = next((t for t in map(log_ts, lines[:200]) if t), None)
+                t_last = next((t for t in map(log_ts, reversed(lines[-200:])) if t), None)
                 nlines += len(lines)
-                self.q.put(("logstat", {"lines": nlines, "size": size}))
+                # None: henüz bilinmiyor (oyun yeni açıldı), False: ayrıntı satırı yok
+                has = True if detail else (False if t_first and t_last and t_last - t_first > LOG_DETAIL_WAIT else None)
+                self.q.put(("logstat", {"lines": nlines, "size": size, "detail": has}))
                 if pos < size:
                     continue  # ilk taramada hızlı devam et
             if first:
@@ -2168,7 +2195,10 @@ def run_gui(start_hidden=False):
     def update_loghelp(kind):
         """Log bulunamadı ya da oyun açıkken log yazılmıyor: elle seçmeyi / log'u açmayı anlat."""
         txt = ""
-        if kind == "bad":
+        if kind == "bad" and st.get("log_nodetail"):
+            txt = ("The game is writing only a basic log, so items, maps and Void Sea runs can't be read. "
+                   + LOG_ENABLE_HELP)
+        elif kind == "bad":
             txt = ("Log file not found. Click “Select log…” and choose UE_game.log in "
                    "<game folder>\\UE_game\\TorchLight\\Saved\\Logs.\n" + LOG_ENABLE_HELP)
         elif kind == "good" and time.time() - st.get("game_seen", 0) < 90:
@@ -2772,8 +2802,13 @@ def run_gui(start_hidden=False):
                         mt = datetime.fromtimestamp(os.path.getmtime(lp)).strftime("%H:%M:%S")
                     except OSError:
                         mt = "?"
-                    st["log"] = ("good", f"✔ Reading log · {v['lines']:,} lines · last write {mt}\n{lp}")
+                    st["log_nodetail"] = v.get("detail") is False
+                    if st["log_nodetail"]:      # dosya okunuyor ama işe yarar satır yok: hata say
+                        st["log"] = ("bad", f"✖ Log can't be used — the game isn't writing details (Enable Log is off)\n{lp}")
+                    else:
+                        st["log"] = ("good", f"✔ Reading log · {v['lines']:,} lines · last write {mt}\n{lp}")
                 elif k == "logerr":
+                    st["log_nodetail"] = False
                     st["log"] = ("bad", f"✖ {v} — use 'Select log…' to pick UE_game.log")
                 elif k == "tray":
                     if v == "open":

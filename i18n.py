@@ -142,6 +142,7 @@ TEMPLATES_ZH = {
     "✔ Reading log · {n} lines · last write {t}": "✔ 正在读取日志 · {n} 行 · 最后写入 {t}",
     "✖ LOG NOT FOUND — use 'Select log…' on the right to pick UE_game.log": "✖ 找不到日志 — 请点击右侧“选择日志”选择 UE_game.log",
     "✖ {e} — use 'Select log…' to pick UE_game.log": "✖ {e} — 请点击“选择日志”选择 UE_game.log",
+    "✖ Log can't be used — the game isn't writing details (Enable Log is off)": "✖ 日志无法使用 — 游戏没有写入详细信息（“开启日志”未打开）",
     "{t} read": "{t} 已读取", "{n} profitable offer(s)": "{n} 个有利可图的商品",
     "{n} card(s) not read, try 'Read screen' again": "{n} 张卡未读取，请再次点击“读取屏幕”",
     "no price: {items} (search on Exchange)": "无价格：{items}（请在交易所搜索）",
@@ -233,6 +234,8 @@ TEMPLATES_ZH = {
         "找不到日志文件。请点击“选择日志”，在 <游戏文件夹>\\UE_game\\TorchLight\\Saved\\Logs 中选择 UE_game.log。",
     "To turn the log on in game: log in to a character → Settings → Other → “Enable Log”, then go back to the character select screen and log in again.":
         "在游戏中开启日志：登录角色 → 设置 → 其他 → “开启日志”，然后返回角色选择界面再重新登录。",
+    "The game is writing only a basic log, so items, maps and Void Sea runs can't be read. To turn the log on in game: log in to a character → Settings → Other → “Enable Log”, then go back to the character select screen and log in again.":
+        "游戏只写入基本日志，因此无法读取物品、地图和虚海记录。在游戏中开启日志：登录角色 → 设置 → 其他 → “开启日志”，然后返回角色选择界面再重新登录。",
     "The game is running but the log is not being written. To turn the log on in game: log in to a character → Settings → Other → “Enable Log”, then go back to the character select screen and log in again.":
         "游戏正在运行，但日志没有写入。在游戏中开启日志：登录角色 → 设置 → 其他 → “开启日志”，然后返回角色选择界面再重新登录。",
 }
