@@ -184,6 +184,14 @@ class Tray:
         except Exception:
             self.icon = None
 
+    def notify(self, text, title="TLI Blessing Helper"):
+        """Windows bildirimi (tepsi simgesinden); desteklenmezse sessizce geç."""
+        try:
+            if self.icon:
+                self.icon.notify(text, title)
+        except Exception:
+            pass
+
     def stop(self):
         try:
             if self.icon:

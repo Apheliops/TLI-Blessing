@@ -59,7 +59,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.4"
+APP_VERSION = "6.5"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -754,9 +754,14 @@ class Engine:
 # --------------------------------------------------------------------------- #
 # "Enable Log" kapalıyken oyun yine log yazıyor ama sadece temel satırları: bölge geçişi, eşya
 # hareketi, terminal fısıltıları yok. Açıkken ilk bölge satırı oyun açıldıktan ~20 sn sonra geliyor.
-LOG_DETAIL_MARKERS = (b"EnterLevel(", b"ItemChange@")
-LOG_DETAIL_WAIT = 120          # log'un ilk satırından bu kadar sn sonra hâlâ yoksa: ayrıntı kapalı
-AUTO_COLLAPSE_MS = 3000        # Blessings / Void Sea ekranı kapandıktan sonra panel bu kadar bekleyip küçülür
+# Sayfa açılışları iki biçimde yazılıyor ve hiç karışmıyor: açıkken "PageBase@ OpenFlow5! OpenView X",
+# kapalıyken "] Page@ OpenView X". Oyun açılınca ilk dakikada birkaç sayfa açıldığı için durum hemen belli olur;
+# oyun içinde ayar değişirse en son görülen biçim geçerli.
+LOG_DETAIL_MARKERS = (b"EnterLevel(", b"ItemChange@", b"PageBase@")
+LOG_NODETAIL_MARKER = b"] Page@ OpenView "
+LOG_DETAIL_WAIT = 120          # hiç sayfa satırı yoksa: log'un ilk satırından bu kadar sn sonra hâlâ ayrıntı yoksa kapalı
+UPDATE_CHECK_MS = 30 * 60 * 1000   # yeni sürüm kontrolü: açılıştan 3 sn sonra, sonra 30 dk'da bir
+AUTO_COLLAPSE_MS = 3000       # Blessings / Void Sea ekranı kapandıktan sonra panel bu kadar bekleyip küçülür
 LOG_TS_RX = re.compile(rb"^\[(\d{4})\.(\d\d)\.(\d\d)-(\d\d)\.(\d\d)\.(\d\d)")
 
 
@@ -782,7 +787,7 @@ class Tailer(threading.Thread):
         pos, buf, size_prev = 0, b"", 0
         nlines = 0
         first = True
-        t_first, detail = None, False
+        t_first, detail = None, None
         while not self.stop_flag:
             try:
                 size = os.path.getsize(self.path)
@@ -794,7 +799,7 @@ class Tailer(threading.Thread):
                 pos, buf = 0, b""
                 parser.reset()
                 nlines = 0
-                t_first, detail = None, False
+                t_first, detail = None, None
                 self.q.put(("newlog", None))
             size_prev = size
             if size > pos:
@@ -811,18 +816,22 @@ class Tailer(threading.Thread):
                 lines = buf.split(b"\n")
                 buf = lines.pop()
                 for raw in lines:
-                    if not detail and any(k in raw for k in LOG_DETAIL_MARKERS):
+                    if any(k in raw for k in LOG_DETAIL_MARKERS):
                         detail = True
+                    elif LOG_NODETAIL_MARKER in raw:
+                        detail = False
                     try:
                         parser.feed(raw.decode("utf-8", "replace").lstrip("﻿"))
                     except Exception:
                         pass
-                if t_first is None:
-                    t_first = next((t for t in map(log_ts, lines[:200]) if t), None)
+                if t_first is None:            # log'un başında yüzlerce damgasız satır olabiliyor
+                    t_first = next((t for t in map(log_ts, lines) if t), None)
                 t_last = next((t for t in map(log_ts, reversed(lines[-200:])) if t), None)
                 nlines += len(lines)
                 # None: henüz bilinmiyor (oyun yeni açıldı), False: ayrıntı satırı yok
-                has = True if detail else (False if t_first and t_last and t_last - t_first > LOG_DETAIL_WAIT else None)
+                has = detail
+                if has is None and t_first and t_last and t_last - t_first > LOG_DETAIL_WAIT:
+                    has = False
                 self.q.put(("logstat", {"lines": nlines, "size": size, "detail": has}))
                 if pos < size:
                     continue  # ilk taramada hızlı devam et
@@ -1259,7 +1268,8 @@ def run_gui(start_hidden=False):
 
     # --- DS ile alınabilen eşyalar: hangileri önerilsin (en değersizden en değerliye) ---
     fr_it_card, fr_it = panel(tab_ds, "Items sold for DS",
-                              "Click a row to recommend it or hide it from the advice.")
+                              "Click a row to recommend it or hide it from the advice.",
+                              fill="both", expand=True)      # kalan boşluğu doldurur; teklifler okununca kısalır
     tvi = ttk.Treeview(fr_it, columns=("item", "packs", "val", "rec"), show="headings", height=5, selectmode="none")
     for c, t, w, a in [("item", "Item", 230, "w"), ("packs", "Packs", 110, "center"),
                        ("val", "Value (FE, best pack)", 140, "e"), ("rec", "Recommend", 110, "center")]:
@@ -1272,7 +1282,7 @@ def run_gui(start_hidden=False):
     sbi = ttk.Scrollbar(fr_it, orient="vertical", command=tvi.yview, style="Dark.Vertical.TScrollbar")
     tvi.configure(yscrollcommand=sbi.set)
     sbi.pack(side="right", fill="y")
-    tvi.pack(fill="x")
+    tvi.pack(fill="both", expand=True)
     item_rows = {}
     hover = {"iid": None}
 
@@ -1414,21 +1424,8 @@ def run_gui(start_hidden=False):
     lbl_verdict = tk.Label(qrow, text="", bg=BG, fg=FG, font=("Segoe UI", 12, "bold"))
     lbl_verdict.pack(side="left", padx=10)
 
-    # --- Son alımlar ---
-    fr_p_card, fr_p = panel(tab_ds, "Recent purchases", "Read automatically from the game log.",
-                            fill="both", expand=True)
-    tvp = ttk.Treeview(fr_p, columns=("t", "item", "ds", "res"), show="headings", height=3)
-    for c, t, w, a in [("t", "Time", 64, "center"), ("item", "Item", 240, "w"),
-                       ("ds", "DS", 70, "e"), ("res", "Result", 140, "e")]:
-        H(tvp, c, t, anchor=a)
-        tvp.column(c, width=w, anchor=a)
-    tree_colors(tvp)
-    tvp.tag_configure("good", foreground=GOOD)
-    tvp.tag_configure("bad", foreground=BAD)
-    tvp.tag_configure("unk", foreground=MUTED)
-    tvp.pack(fill="both", expand=True)
-    lbl_sum = tk.Label(fr_p, text="", bg=SURF, fg=FG, anchor="w", justify="left", font=(F_UI, 9))
-    lbl_sum.pack(side="bottom", fill="x", pady=(8, 0), before=tvp)   # tablo uzasa da özet görünsün
+    # "Recent purchases" paneli v6.5'te kaldırıldı (teklifler okununca sayfayı uzatıyordu, gereksizdi);
+    # alımlar yine log'dan okunuyor: teklif eşleştirme (match_buy_to_offer) bunlara bakıyor.
 
     # --- DS sekmesinin alt çubuğu: hesap ayarları ---
     bot = tk.Frame(tab_ds, bg=BG)
@@ -1624,21 +1621,6 @@ def run_gui(start_hidden=False):
             if sel_key == (cid, qty):
                 tv.selection_set(iid)
 
-        tvp.delete(*tvp.get_children())
-        for i, p in enumerate(reversed(eng.purchases[-60:])):
-            t = datetime.fromtimestamp(p["ts"]).strftime("%H:%M")
-            if not p["cid"]:
-                tvp.insert("", "end", values=trv((t, "?", p["ds"], "item not read")), tags=zebra("unk", i))
-                continue
-            ok, profit = eng.judge(p["cid"], p["qty"], p["ds"])
-            res = "no price" if ok is None else (("✔ +" if ok else "✖ ") + fmt(profit, 2) + " FE")
-            tvp.insert("", "end", values=trv((t, f"{item_name(p['cid'])} ×{p['qty'] if p['qty'] is not None else '?'}", p["ds"], res)),
-                       tags=zebra("unk" if ok is None else ("good" if ok else "bad"), i))
-        sm = eng.summary()
-        lbl_sum.config(text=(tr(f"Purchases {sm['n_buy']} ({sm['ds_buy']:,} DS)  ·  Refreshes {sm['n_refresh']} ({sm['ds_refresh']:,} DS)\n"
-                             + f"Value received {fmt(sm['value'], 1)} FE  −  DS spent (in FE) {fmt(sm['cost'], 1)} FE  =  "
-                             + f"NET {fmt(sm['net'], 1)} FE"
-                             + (f"   (price unknown for {sm['unknown']} purchases)" if sm["unknown"] else ""))))
         update_verdict()
 
     def start_tailer():
@@ -1857,15 +1839,27 @@ def run_gui(start_hidden=False):
             ov_tabs.pack_forget()
             ov_upd.pack_forget()
             ov_foot.pack_forget()
-            ov.update_idletasks()
-            ov.geometry(f"{ov.winfo_width()}x{ov_head.winfo_reqheight()}")
             ov_state["collapsed"] = True
+            fit_collapsed()
             btn_min.config(text="+")
         else:
             layout_overlay()
             ov.geometry(f"{ov.winfo_width()}x{ov_state['full_h'] or 230}")
             ov_state["collapsed"] = False
             btn_min.config(text="–")
+
+    def fit_collapsed():
+        """Küçük panel: sadece başlık; yeni sürüm varsa onun satırı da görünsün (gözden kaçmasın)."""
+        h = ov_head.winfo_reqheight()
+        if st.get("update"):
+            if not ov_upd.winfo_ismapped():
+                ov_upd.pack(fill="x", padx=6, pady=(4, 0))
+            ov.update_idletasks()
+            h += ov_upd.winfo_reqheight() + 8
+        else:
+            ov_upd.pack_forget()
+        ov.update_idletasks()
+        ov.geometry(f"{ov.winfo_width()}x{h}")
 
     def manual_collapse():
         ov_state["auto"] = False           # kullanıcı kendisi açtı/kapattı: otomatik küçültme karışmasın
@@ -2243,7 +2237,7 @@ def run_gui(start_hidden=False):
     def check_update():
         if data["settings"].get("check_updates", True):
             threading.Thread(target=lambda: q.put(("update", latest_release())), daemon=True).start()
-        root.after(6 * 3600 * 1000, check_update)
+        root.after(UPDATE_CHECK_MS, check_update)      # uygulama günlerce açık kalabiliyor: ara ara tekrar bak
 
     def show_update(rel):
         if st.get("updating"):
@@ -2258,10 +2252,16 @@ def run_gui(start_hidden=False):
             upd_go.config(state="normal" if zip_url else "disabled")
             if not upd_bar.winfo_ismapped():
                 upd_bar.pack(fill="x", padx=16, pady=(4, 0), after=logbox)
+            if st.get("update_notified") != tag:     # her yeni sürüm için bir kez Windows bildirimi
+                st["update_notified"] = tag
+                if tray_obj["t"] is not None:
+                    tray_obj["t"].notify(tr(f"Version {tag} is available. Open the app and press “Install update”."))
         else:
             upd_bar.pack_forget()
         if not ov_state.get("collapsed"):
             layout_overlay()
+        else:
+            fit_collapsed()
 
     def open_update():
         import webbrowser
