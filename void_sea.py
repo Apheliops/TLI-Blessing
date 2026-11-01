@@ -1448,7 +1448,8 @@ DESC_RX = re.compile(r"\+Description \[(.*)\]\s*$")
 # Void Sea Seal ve Void Sea Terminal sayfaları (log: "PageBase@ OpenFlow5! OpenView VoidBeacon")
 OPEN_RX = re.compile(r"OpenView (VoidBeacon|VoidPort)\s*$")
 # sayfa kapandı: "PageBase@ BackFlow0! Switch = true 15414_VoidBeaconCtrl 1260244"
-CLOSE_RX = re.compile(r"BackFlow0!.*\d+_(VoidBeacon|VoidPort)Ctrl")
+# ya da oyunun diğer log biçiminde: "Page@ CloseView 11485_VoidBeaconCtrl"
+CLOSE_RX = re.compile(r"(?:BackFlow0!.*|CloseView )\d+_(VoidBeacon|VoidPort)Ctrl")
 # Hero Memory türleri: 71001 Origin, 71002 Discipline, 71003 Progress (kalite log'da yok)
 MEM_RX = re.compile(r"ItemChange@ Add Id=(7100[123]_\S+)")      # tür + eşyanın tekil kimliği
 

@@ -59,7 +59,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.3"
+APP_VERSION = "6.4"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -541,6 +541,11 @@ class Parser:
             if self.in_blessings:
                 self.emit("shop", {"ts": self.last_ts or time.time(), "why": "open"})
             return
+        # --- Blessings ekranı kapandı (iki log biçimi: "BackFlow0! … 20923_GroceryStoreV3Ctrl" ve "Page@ CloseView 18110_GroceryStoreV3Ctrl") ---
+        if "_GroceryStoreV3Ctrl" in line and ("BackFlow0!" in line or "CloseView " in line):
+            if self.in_blessings:
+                self.emit("shop_close", {"ts": self.last_ts or time.time()})
+            return
 
         # --- Envanter değişimleri ---
         if "ItemChange@" in line or "BagMgr@" in line:
@@ -751,6 +756,7 @@ class Engine:
 # hareketi, terminal fısıltıları yok. Açıkken ilk bölge satırı oyun açıldıktan ~20 sn sonra geliyor.
 LOG_DETAIL_MARKERS = (b"EnterLevel(", b"ItemChange@")
 LOG_DETAIL_WAIT = 120          # log'un ilk satırından bu kadar sn sonra hâlâ yoksa: ayrıntı kapalı
+AUTO_COLLAPSE_MS = 3000        # Blessings / Void Sea ekranı kapandıktan sonra panel bu kadar bekleyip küçülür
 LOG_TS_RX = re.compile(rb"^\[(\d{4})\.(\d\d)\.(\d\d)-(\d\d)\.(\d\d)\.(\d\d)")
 
 
@@ -1861,8 +1867,25 @@ def run_gui(start_hidden=False):
             ov_state["collapsed"] = False
             btn_min.config(text="–")
 
+    def manual_collapse():
+        ov_state["auto"] = False           # kullanıcı kendisi açtı/kapattı: otomatik küçültme karışmasın
+        toggle_collapse()
+
+    def auto_collapse_later(still_closed):
+        """Blessings / Void Sea ekranı kapandı: birkaç sn bekle, ekran yeniden açılmadıysa ve panel
+        o ekran yüzünden otomatik açıldıysa paneli küçült."""
+        ov_state["close_seq"] = ov_state.get("close_seq", 0) + 1
+        seq = ov_state["close_seq"]
+
+        def go():
+            if ov_state["close_seq"] == seq and ov_state.get("auto") and still_closed():
+                ov_state["auto"] = False
+                if not ov_state["collapsed"]:
+                    toggle_collapse()
+        root.after(AUTO_COLLAPSE_MS, go)
+
     btn_min = None
-    for txt, cmd in (("✕", quit_app), ("–", toggle_collapse), ("⚙", toggle_main)):
+    for txt, cmd in (("✕", quit_app), ("–", manual_collapse), ("⚙", toggle_main)):
         b = tk.Label(ov_head, text=tr(txt), bg=OPANEL, fg=MUTED, font=("Segoe UI", 10, "bold"), cursor="hand2", padx=6)
         b.pack(side="right")
         b.bind("<Button-1>", lambda e, c=cmd: c())
@@ -2576,6 +2599,7 @@ def run_gui(start_hidden=False):
             return
         elif ev == "close":
             vs_st["open_page"] = None
+            auto_collapse_later(lambda: not vs_st.get("open_page"))
             return
         elif ev == "scan":
             vs_st["scanning"] = False
@@ -2599,6 +2623,9 @@ def run_gui(start_hidden=False):
             elif ok:
                 if auto:
                     switch_tab("vs")
+                    ov_state["auto"] = True
+                    if not vs_st.get("open_page"):     # okuma bitene kadar ekran kapandıysa
+                        auto_collapse_later(lambda: not vs_st.get("open_page"))
                 vs_st["msg"] = f"{t} read" + (f" · {vs.note}" if vs.note else "")
                 if not vs.complete() or vs.note.startswith("read "):   # eksik okunan ekranı incelemek için sakla
                     try:
@@ -2842,10 +2869,17 @@ def run_gui(start_hidden=False):
                     continue
                 elif k == "shop":
                     # sadece canlı olaylar (ilk log taramasındaki eski olaylar değil)
+                    if abs(time.time() - v["ts"]) < 20:
+                        st["shop_open"] = True
                     if data["settings"].get("auto_ocr", True) and abs(time.time() - v["ts"]) < 20:
-                        if ov_state_tab["tab"] != "bl":
+                        if ov_state_tab["tab"] != "bl" or ov_state["collapsed"]:
                             switch_tab("bl")
+                        ov_state["auto"] = True
                         root.after(800, lambda w=v["why"]: start_scan(w))
+                elif k == "shop_close":
+                    if abs(time.time() - v["ts"]) < 20:
+                        st["shop_open"] = False
+                        auto_collapse_later(lambda: not st.get("shop_open"))
                 else:
                     if k == "buy":
                         match_buy_to_offer(v)
@@ -2959,15 +2993,42 @@ def replay(path, tax=None):
     print("\nÖzet:", eng.summary())
 
 
+def startup_failed(tb):
+    """Açılışta çökme: pythonw ile konsol yok, kullanıcı hiçbir şey görmüyordu.
+    Hatayı error_log.txt'ye yaz ve Windows mesaj kutusuyla göster (tkinter bozuksa da çalışsın)."""
+    last = tb.strip().splitlines()[-1] if tb.strip() else "Unknown error"
+    try:
+        os.makedirs(USER_DIR, exist_ok=True)
+        with open(user_file("error_log.txt"), "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat()} v{APP_VERSION} startup (Python {sys.version.split()[0]})\n{tb}\n")
+    except Exception:
+        pass
+    hint = ""
+    if "ModuleNotFoundError" in last or "ImportError" in last:
+        hint = "A required package is missing. Run Setup.bat once, then start the app again.\n\n"
+    msg = (f"TLI Blessing Helper could not start.\n\n{last}\n\n{hint}"
+           f"Details were saved to userdata\\error_log.txt.\n"
+           f"Please attach that file when you report the problem on GitHub.")
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, msg, "TLI Blessing Helper", 0x10)
+    except Exception:
+        print(msg, file=sys.stderr)
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "--replay":
         replay(sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else None)
     else:
-        if "--wait-pid" in sys.argv:                   # güncellemeden sonra: eski sürüm kapansın
-            try:
-                wait_for_pid(sys.argv[sys.argv.index("--wait-pid") + 1])
-            except (IndexError, ValueError):
-                pass
-            if "--pip" in sys.argv:
-                pip_install_requirements()
-        run_gui(start_hidden="--tray" in sys.argv)
+        try:
+            if "--wait-pid" in sys.argv:               # güncellemeden sonra: eski sürüm kapansın
+                try:
+                    wait_for_pid(sys.argv[sys.argv.index("--wait-pid") + 1])
+                except (IndexError, ValueError):
+                    pass
+                if "--pip" in sys.argv:
+                    pip_install_requirements()
+            run_gui(start_hidden="--tray" in sys.argv)
+        except Exception:
+            import traceback
+            startup_failed(traceback.format_exc())

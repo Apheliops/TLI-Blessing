@@ -4,10 +4,16 @@ cd /d "%~dp0"
 echo === TLI Blessing Helper setup ===
 echo.
 set PY=
-where py >nul 2>nul && set PY=py -3
-if not defined PY (where python >nul 2>nul && set PY=python)
+set OLD=
+rem Test that Python really runs: the Microsoft Store "python" shortcut is found by "where" but does not
+for %%P in ("py -3" "python") do if not defined PY (
+  %%~P -c "import sys;sys.exit(0 if sys.version_info>=(3,9) else 3)" >nul 2>nul
+  if errorlevel 1 (if errorlevel 3 if not errorlevel 4 set OLD=1) else set "PY=%%~P"
+)
 if not defined PY (
-  echo Python was not found. Install it from https://www.python.org/downloads/
+  if defined OLD echo Your Python is too old: TLI Blessing Helper needs Python 3.9 or newer.
+  where python 2>nul | find /i "WindowsApps" >nul && echo The "python" command on this PC is only the Microsoft Store shortcut, not a real Python install.
+  echo No working Python 3.9+ was found. Install it from https://www.python.org/downloads/
   echo Tick "Add python.exe to PATH" during setup, then run this file again.
   start https://www.python.org/downloads/
   pause
