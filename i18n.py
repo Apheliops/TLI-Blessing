@@ -48,6 +48,39 @@ GLOSSARY_ZH = {
 
 # Tam eşleşen metinler
 EXACT_ZH = {
+    # v6.6: sekmeler, fiyat paylaşımı, Bug, envanter
+    "DS Calculator": "神威辉石计算", "Inventory value": "背包价值", "Share prices": "共享价格",
+    "Players help each other fill in Exchange prices.": "玩家互相补全交易行价格。",
+    "finished · 1 in progress": "已完成 · 1 局进行中", "finished runs": "已完成的局数", "finished run": "已完成的局数",
+    "after your first finished run": "完成第一局后显示", "This run": "本局", "This run · in progress": "本局 · 进行中",
+    "In progress": "进行中", "in progress": "进行中",
+    "The run in progress counts toward the averages when you leave the Void Sea map.": "离开虚海地图后，进行中的这一局会计入平均值。",
+    "FE earned": "获得 FE", "FE per run": "每局 FE", "Scrap / Thread": "碎絮 / 游丝", "after tax": "税后",
+    "after tax, all finished runs": "税后，所有已完成的局", "no run with this plan yet": "此方案还没有记录",
+    "Last 20 runs of this plan, newest on the right: Memory Scrap and Thread picked up, at your Exchange prices after "
+    "tax. The dashed line is your average. Click a bar to open that run.":
+        "此方案最近 20 局，最新的在右边：拾取的追忆碎絮和游丝，按你的交易行税后价格计算。虚线是你的平均值。点击柱子查看该局。",
+    "A run counts toward the averages when you leave the Void Sea map.": "离开虚海地图后，这一局才计入平均值。",
+    "Pick the Memory materials plan and run the Void Sea; each run is added here automatically with the Scrap and "
+    "Threads you pick up.": "选择追忆材料方案并进行虚海；每一局及拾取的碎絮和游丝会自动添加到这里。",
+    "not tradeable": "不可交易", "Scrap / Thread (number not read)": "碎絮 / 游丝（数字未读出）",
+    "Name this item": "命名此物品", "Name this item…": "命名此物品…", "Save": "保存",
+    "This item is new and not in the item list yet. Type its English name as shown in game (hover it in your bag). "
+    "The icon is then looked up on tlidb.": "这是新物品，物品列表中还没有它。请输入游戏中显示的英文名称（在背包中悬停查看），"
+    "之后会在 tlidb 上查找图标。",
+    "Unnamed items are new this season: right-click one to name it.": "未命名的物品是本赛季新物品：右键点击即可命名。",
+    "What it does": "它会做什么", "What it doesn't do": "它不会做什么", "Turn on": "开启", "Cancel": "取消",
+    "Sends the Exchange prices this app reads from your game log (item, price, time) to the TLI Blessing Helper "
+    "price server.": "把本程序从游戏日志读到的交易行价格（物品、价格、时间）发送到 TLI Blessing Helper 价格服务器。",
+    "Downloads prices other players shared, for items you haven't searched yourself. They are marked with “≈”.":
+        "为你自己没有搜索过的物品下载其他玩家共享的价格，并用“≈”标出。",
+    "Also fills in missing prices in the DS Calculator.": "也会补全神威辉石计算中缺少的价格。",
+    "Sends no account, name, IP address or game data other than prices. A random install number is sent so the "
+    "same player isn't counted twice.": "不发送账号、名字、IP 地址或价格以外的游戏数据。只发送一个随机安装编号，避免同一玩家被重复计算。",
+    "Never replaces your own searches: they always come first.": "不会替换你自己的搜索结果：你的价格始终优先。",
+    "Uses a shared price only when at least 3 players sent it, or when the app's developer checked it in game; "
+    "extreme values are ignored.": "只有至少 3 位玩家发送过、或本程序开发者在游戏中核实过的价格才会使用；极端值会被忽略。",
+    "Sends nothing while it is off. You can turn it off any time.": "关闭时不发送任何内容。你可以随时关闭。",
     # üst alan / sekmeler
     "📂  Select log": "📂  选择日志", "Release page": "发布页面", "⬇  Install update": "⬇  安装更新",
     "◈  DS Calculator": "◈  神威辉石计算", "◎  Void Sea Terminal": "◎  虚海终港",
@@ -211,6 +244,7 @@ TEMPLATES_ZH = {
     "Run {n}  ·  {t}": "第 {n} 次  ·  {t}", "{m} memories  ·  {r} red": "{m} 追忆  ·  {r} 红色",
     "{d}  · now": "{d}  · 进行中",
     "average {a} per run": "平均每次 {a}",
+    "average {a} FE per run": "平均每局 {a} FE",
     "+{m}  ({lo}–{hi})": "+{m}  （{lo}–{hi}）",
     "{a} of {b} runs used  ·  {m} Hero Memories  ·  {r} red": "使用 {a}/{b} 次  ·  {m} 英雄追忆  ·  {r} 红色",
     "Left out: run {n} ({t}): {why}": "未计入：第 {n} 次（{t}）：{why}",

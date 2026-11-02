@@ -166,10 +166,17 @@ Everything personal is stored in the `userdata` folder next to the app — it st
 | `error_report.md`, `error_screens/` | every reading problem and program error, with a screenshot — attach these to a bug report |
 | `last_scan*.png`, `error_log.txt` | last failed screen read and raw error log |
 | `icon.png` | app icon, downloaded once from tlidb |
+| `icons/` | item icons for the Inventory value tab, downloaded once from tlidb |
+| `items_extra.json` | latest item list (names and icon addresses for new-season items), refreshed once a day |
+| `item_names.json` | names you gave to items that are not in the item list yet (right-click an unnamed item) |
 
 When moving the app to another folder, copy `userdata` too.
 
-**Update check:** at startup (and every 6 hours) the app asks GitHub for the latest release number of this repository. Nothing about you or your data is sent. If a newer version exists, a "new version available" bar appears in the main window and a one-line notice on the overlay. **Install update** downloads the release zip from this repository's GitHub Releases, replaces the program files and restarts the app; the `userdata` folder is never touched and the replaced files are kept in `backup\update-from-v<old version>`. **Release page** opens the download page instead, if you prefer to update by hand. Turn the check off with **Check for updates** at the bottom of the main window.
+**Share prices (optional, off by default):** the checkbox on the *Inventory value* tab. When you turn it on, the Exchange prices the app reads from your game log (item number, price, time) are sent to the TLI Blessing Helper price server, together with a random install number so the same player isn't counted twice. No account, name or other game data is sent, and the server does not store IP addresses. In return the app downloads shared prices for items you haven't searched yourself (marked with "≈"); your own searches always come first. A shared price is published once at least 3 players sent it (extreme values are ignored), or right away when the app's developer checked it in game. Nothing is sent while the option is off.
+
+**Item list:** once a day the app downloads the latest item list (item names and icon addresses) from the [TITrack](https://github.com/astockman99/TITrack) repository on GitHub, so items added in a new season get their names. Nothing is sent.
+
+**Update check:** at startup (and every 30 minutes) the app asks GitHub for the latest release number of this repository. Nothing about you or your data is sent. If a newer version exists, a "new version available" bar appears in the main window and a one-line notice on the overlay. **Install update** downloads the release zip from this repository's GitHub Releases, replaces the program files and restarts the app; the `userdata` folder is never touched and the replaced files are kept in `backup\update-from-v<old version>`. **Release page** opens the download page instead, if you prefer to update by hand. Turn the check off with **Check for updates** at the bottom of the main window.
 
 ## Troubleshooting
 

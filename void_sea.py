@@ -28,6 +28,28 @@ NUM = r"(\d+(?:[.,]\d+)?)"
 # "%" OCR'da "o/o", "0/0", "°/o" ya da "96" ("20%" -> "2096") olarak okunabiliyor
 PCT = NUM + r"\s*(?:%|o/o|0/0|[°º]/o|96(?=\s))"
 PCT_OPT = NUM + r"\s*(?:%|o/o|0/0|[°º]/o)?"
+
+
+def _item_patterns(suf, word):
+    """Memory Scrap (S) / Memory Thread (T) etkileri: Wealth (çıkma şansı, miktar, sabit ek, şanslı ek) ve
+    Wonder (×2 / ×3 çarpılma şansı). Kırmızıya katkıları yok; FE planında kullanılır (tlidb metinleri).
+    Çarpılma değeri: şans % × (kat − 1), ör. "%84 şansla ×3" -> 168 (beklenen ek yüzde)."""
+    item = r"memory\s*" + word
+    return [
+        ("mult" + suf, re.compile(PCT + r"\s*chance\s*for\s*" + item + r"\s*dropped[^%]*?"
+                                  r"(?:multiplied\s*by\s*" + NUM + r"|doubled)", re.I),
+         lambda m: _f(m.group(1)) * ((_f(m.group(2)) if m.group(2) else 2.0) - 1)),
+        ("app" + suf, re.compile(PCT + r"\s*chance\s*for\s*" + item + r"\s*to\s*appear", re.I), lambda m: _f(m.group(1))),
+        ("qty" + suf, re.compile(PCT + r"\s*additional\s*" + item + r"\s*drop\s*quantit", re.I), lambda m: _f(m.group(1))),
+        ("luck" + suf, re.compile(PCT + r"\s*chance\s*for\s*" + NUM + r"\s*additional\s*" + item, re.I),
+         lambda m: _f(m.group(1)) / 100 * _f(m.group(2))),
+        # kalın beyaz "20%" okunamazsa ("chance for 49 additional Memory Scrap(s)"): şans her kademede %20
+        ("luck" + suf, re.compile(r"chance\s*for\s*" + NUM + r"\s*additional\s*" + item, re.I),
+         lambda m: 0.2 * _f(m.group(1))),
+        ("flat" + suf, re.compile(NUM + r"\s*additional\s*" + item, re.I), lambda m: _f(m.group(1))),
+    ]
+
+
 # Sıra önemli: daha özel desenler önce.
 EFFECT_PATTERNS = [
     ("luck",   re.compile(PCT + r"\s*chance\s*for\s*" + NUM + r"\s*additional\s*hero\s*memor", re.I),
@@ -46,6 +68,7 @@ EFFECT_PATTERNS = [
     # "Dro Rarit" gibi harf eksik okunuşlar da kabul
     ("rarity", re.compile(PCT_OPT + r"\s*void\s*sea\s*treasure[\W_]*dro\w*[\W_]*rarit\w*", re.I), lambda m: _f(m.group(1))),
     ("tQty",   re.compile(PCT_OPT + r"\s*void\s*sea\s*treasure[\W_]*dro\w*[\W_]*quantit\w*", re.I), lambda m: _f(m.group(1))),
+    *[pat for suf, word in (("S", r"scraps?"), ("T", r"threads?")) for pat in _item_patterns(suf, word)],
     ("none",   re.compile(r"memory\s*(?:scrap|thread)", re.I), lambda m: 0.0),
 ]
 # Çince istemci (v6.1; Reddit'ten bir oyuncunun 2560×1440 ekran görüntülerinden). Metin boşluksuz eşleşir:
@@ -93,9 +116,14 @@ EFFECT_NAMES = {
     "appear": "Appear chance", "memQty": "Memory quantity", "flat": "Flat extra",
     "luck": "Lucky extra", "baseQ": "Base quantity", "tQty": "Treasure quantity",
     "rarity": "Rarity", "rep": "Replication", "none": "No effect on red",
+    "appS": "Scrap appear", "qtyS": "Scrap quantity", "flatS": "Flat Scrap", "luckS": "Lucky Scrap",
+    "multS": "Scrap multiply",
+    "appT": "Thread appear", "qtyT": "Thread quantity", "flatT": "Flat Thread", "luckT": "Lucky Thread",
+    "multT": "Thread multiply",
 }
 ARM_ONLY = {"appear", "memQty", "flat", "luck"}
-WON_ONLY = {"rarity", "tQty"}
+WON_ONLY = {"rarity", "tQty", "multS", "multT"}
+WEA_ONLY = {"appS", "qtyS", "flatS", "luckS", "appT", "qtyT", "flatT", "luckT"}
 SIDE_LABEL = {"arm": "Armament", "won": "Wonder", "wea": "Wealth", "boss": "Boss", "?": "?"}
 POS_NAME = {1: ["middle"], 2: ["left", "right"], 3: ["left", "middle", "right"]}
 
@@ -144,10 +172,13 @@ def parse_effects(text):
     return found
 
 
-def describe(effs):
+def describe(effs, fe=False):
+    """fe=True (FE planı): Scrap / Thread yazısı bulunup sayısı okunamayan etki "kırmızıya etkisiz" değil
+    "sayı okunamadı" diye gösterilir."""
     if not effs:
         return "not read"
-    return ", ".join(f"{EFFECT_NAMES[k]} {v:g}" for k, v, *_ in effs)
+    return ", ".join("Scrap / Thread (number not read)" if fe and k == "none" else f"{EFFECT_NAMES[k]} {v:g}"
+                     for k, v, *_ in effs)
 
 
 def sig(effs):
@@ -285,12 +316,14 @@ def reason_flame(picked, out, best, s, tiers=None):
     return txt
 
 
-def recommend(picked, cards, s):
-    """-> (en iyi kartın sırası | "tie" | None, [(mutlak artış, yüzde artış)] kart sırasıyla)"""
-    base = red_score(picked, s)
+def recommend(picked, cards, s, score=None):
+    """-> (en iyi kartın sırası | "tie" | None, [(mutlak artış, yüzde artış)] kart sırasıyla)
+    score: kırmızı planında red_score, FE planında fe_score."""
+    score = score or red_score
+    base = score(picked, s)
     gains = []
     for _side, effs, _x in cards:
-        g = red_score(picked + effs, s) - base
+        g = score(picked + effs, s) - base
         gains.append((g, g / base * 100 if base > 0 else 0.0))
     if not gains:
         return None, gains
@@ -574,17 +607,22 @@ def _side_of_heading(text):
 
 def _fill_numbers(text, nums):
     """Kalın beyaz rakamlar renkli okumada düşebiliyor: rakamsız kalan '%' ve
-    'additional Hero' öncesine sırayla eksik rakamları yerleştirir."""
+    'additional Hero' / 'additional Memory' (Scrap / Thread) öncesine sırayla eksik rakamları yerleştirir.
+    "32% additional Hero Memory…" gibi zaten "%" ile biten yere sayı konmaz."""
     nums = list(nums)
     out, last = [], 0
-    for m in re.finditer(r"%|additional\s*hero|[枚个]\s*(?:英雄|追忆|虚海)", text, re.I):
+    for m in re.finditer(r"%|additional\s*(?:hero|memory)|[枚个]\s*(?:英雄|追忆|虚海)", text, re.I):
         before = text[:m.start()].rstrip()
         out.append(text[last:m.start()])
-        if nums and not (before and before[-1].isdigit()):
+        if nums and not (before and (before[-1].isdigit() or before[-1] == "%")):
             out.append(f" {nums.pop(0)} ")
         last = m.start()
     out.append(text[last:])
     text = "".join(out)
+    # Wonder: "…to be multiplied by" + ayrı satırda "2" ("time(s)"): kalan sayı katsayının yerine
+    mm = re.search(r"multiplied\s*by(?!\s*\d)", text, re.I)
+    if nums and mm:
+        text = f"{text[:mm.end()]} {nums.pop(0)} {text[mm.end():]}"
     # "%" de okunamadıysa yerleşmeyen sayı kalır: metin sayıyla başlamıyorsa başına koy ("+25 Void Sea…")
     if nums and not re.match(r"\W*\d", text):
         text = f"{nums[0]} {text}"
@@ -680,6 +718,17 @@ def read_cards_color(img, lines):
         # önce 2 kat; etki çıkmazsa 3 kat dene ("Drop Rarity" 2 katta "Dro Rarit" okunabiliyor).
         # bir geçişte bulunan başlık sonrakinde okunamasa da korunur (kart listeden düşmesin)
         head = ""
+        effs = []
+        # okuma kalitesi: sadece "Memory Scrap / Thread" bulunduysa (sayı düşmüş) ya da "şanslı ek" "%" okunmadan
+        # çıktıysa (sayılar yer değiştirmiş olabilir: "chance for 20 additional") okuma bitmiş sayılmaz, bir
+        # sonraki büyütme denenir; en iyisi kalır (FE planında Wealth kartı "etkisiz" ya da yanlış görünüyordu)
+        def quality(es):
+            if not es:
+                return 0
+            if all(k == "none" for k, *_ in es):
+                return 1
+            weak = any(k in ("luck", "luckS", "luckT") and not re.search(r"\d\s*%", src) for k, _v, src in es)
+            return 2 if weak else 3
         for s in (2 * f, 3 * f):
             col = [t for t, *_ in _reading_order(_ocr_any(crop.resize((int(crop.width * s), int(crop.height * s)))))]
             head = next((t for t in col if (re.search(r"of", t, re.I) or "秘语" in squash_cn(t))
@@ -688,23 +737,29 @@ def read_cards_color(img, lines):
             if CJK_RX.search(" ".join(body)):
                 # Çince: rakamlar satır içinde kalsın ("…额外" + ayrı satırda "32"), kısmi okunanlar beyaz rakamla tamamlansın
                 text = " ".join(body)
-                effs = parse_effects(_cn_numbers(text, white_nums,
-                                                 lambda thr: _white_numbers(crop, np, Image, thr=thr, f=f)))
-                if effs:
+                got = parse_effects(_cn_numbers(text, white_nums,
+                                                lambda thr: _white_numbers(crop, np, Image, thr=thr, f=f)))
+                if quality(got) > quality(effs):
+                    effs = got
+                if quality(effs) == 3:
                     break
                 continue
             standalone = [NUM_LINE_RX.match(t).group(1) for t in body if NUM_LINE_RX.match(t)]
             text = " ".join(t for t in body if not NUM_LINE_RX.match(t))
             present = re.findall(r"\d+(?:[.,]\d+)?", text)
             pool = standalone + [n for n in white_nums if n not in standalone and n not in present]
-            effs = parse_effects(_fill_numbers(text, pool))
-            if effs:
+            got = parse_effects(_fill_numbers(text, pool))
+            if quality(got) > quality(effs):
+                effs = got
+            if quality(effs) == 3:
                 break
         side = _side_of_heading(head)
         if side is None and effs:
             k = effs[0][0]
             if k in ARM_ONLY:
                 side = "arm"
+            elif k in WEA_ONLY:
+                side = "wea"
             elif k in WON_ONLY or re.search(r"doubled|multipl", text, re.I):
                 # Wonder: "Memory Scraps … to be multiplied by 2 time(s)" / "doubled"
                 side = "won"
@@ -780,6 +835,19 @@ def analyze_any(img):
     return first
 
 
+def flame_pair(selected):
+    """Ekrandaki iki alevin türleri: seçili alev Wealth ya da Armament ise ondan belli; Wonder seçiliyse
+    (ya da okunamadıysa) uygulamanın planına göre (FLAME_PAIR: kırmızı planı arm/won, FE planı wea/won)."""
+    if selected == "wea":
+        return ("wea", "won")
+    if selected == "arm":
+        return ("arm", "won")
+    return FLAME_PAIR
+
+
+FLAME_PAIR = ("arm", "won")     # uygulama FE planında ("wea", "won") yapar
+
+
 def flame_tiers(cols, selected, sel_tier):
     """Alevlerin garanti kademesi {tür: kademe}. Seçili alevin türü ve kademesi yazıdan; köşesi, rengi
     ortadaki daireyle eşleşen köşe. Diğer köşe diğer türdür, kademesi kendi renginden."""
@@ -788,13 +856,14 @@ def flame_tiers(cols, selected, sel_tier):
     out = {}
     if selected == "boss":
         return out          # Çince: alevlerden biri Boss (首领) fısıltısı garanti ediyor; diğer köşenin türü bilinmiyor
-    if selected not in ("arm", "won"):
-        # seçili alev yazıdan okunamadı: eski varsayım (sol Armament, sağ Wonder)
-        for side, c in (("arm", left), ("won", right)):
+    pair = flame_pair(selected)
+    if selected not in pair:
+        # seçili alev yazıdan okunamadı: eski varsayım (sol Armament/Wealth, sağ Wonder)
+        for side, c in zip(pair, (left, right)):
             if tier(c) is not None:
                 out[side] = tier(c)
         return out
-    other = "won" if selected == "arm" else "arm"
+    other = pair[1] if selected == pair[0] else pair[0]
     if left == right:
         sel_c = oth_c = left                                 # iki alev aynı renk: köşe fark etmez
     elif sel_tier is not None and tier(left) == sel_tier and tier(right) != sel_tier:
@@ -841,26 +910,30 @@ def flame_values(pool, tier):
     return [(k, v) for k, vals in pool for v in vals[tier:]]
 
 
-def flame_advice(picked, s, tiers=None):
+def flame_advice(picked, s, tiers=None, pool=None, score=None):
     """tiers: {tür: garanti en düşük kademe}. Katkılar %3'ten yakınsa kalitesi yüksek alev önerilir.
+    pool/score: kırmızı planında FLAME_POOL (Armament/Wonder) + red_score, FE planında FE_FLAME_POOL + fe_score.
     -> (en iyi tür | "tie" | None, {tür: (ortalama mutlak artış, ortalama yüzde artış)})"""
     tiers = tiers or {}
-    base = red_score(picked, s)
+    pool = pool or FLAME_POOL
+    score = score or red_score
+    base = score(picked, s)
     out = {}
-    for side, pool in FLAME_POOL.items():
-        gs = [red_score(picked + [e], s) - base for e in flame_values(pool, tiers.get(side, DEFAULT_TIER))]
+    for side, kinds in pool.items():
+        gs = [score(picked + [e], s) - base for e in flame_values(kinds, tiers.get(side, DEFAULT_TIER))]
         g = sum(gs) / len(gs)
         out[side] = (g, g / base * 100 if base > 0 else 0.0)
-    a, w = out["arm"][0], out["won"][0]
+    a_side, w_side = list(pool)
+    a, w = out[a_side][0], out[w_side][0]
     top = max(a, w)
     if top <= 1e-9:
         return None, out
     if abs(a - w) <= top * 0.03:
-        ta, tw = tiers.get("arm", DEFAULT_TIER), tiers.get("won", DEFAULT_TIER)
+        ta, tw = tiers.get(a_side, DEFAULT_TIER), tiers.get(w_side, DEFAULT_TIER)
         if ta != tw:
-            return ("arm" if ta > tw else "won"), out
+            return (a_side if ta > tw else w_side), out
         return "tie", out
-    return ("arm" if a > w else "won"), out
+    return (a_side if a > w else w_side), out
 
 
 def read_flame_colors(img):
@@ -890,6 +963,155 @@ def read_flame_colors(img):
         if votes[best] >= keep.sum() * 0.5:
             out[side] = best
     return out
+
+
+# --------------------------------------------------------------------------- #
+# FE planı (Wealth + Wonder): Void Sea haritasında toplanan Memory Scrap ve Memory Thread'lerin FE değeri
+#   X (Scrap ya da Thread) = ( taban_X × (1+taban miktar) × (1+çıkma şansı_X) × (1+miktar_X) + sabit_X + şanslı_X )
+#                            × (1+treasure miktarı) × (1+çarpılma_X)
+#   değer = Scrap × Scrap'in net fiyatı + Thread × bir Thread'in ortalama net fiyatı
+# Varsayım (doğrulanmadı): Wonder'ın treasure miktarı ve ×2/×3'ü Wealth'in ek Scrap/Thread'lerini de çarpar.
+# Rarity bu planda sayılmaz (kullanıcının kararı). Taban sayılar son koşulardan öğrenilir (seviye değiştikçe
+# değişiyor); kayıt yokken FE_DEFAULTS. Thread kalitesi (Magic/Rare/Epic) son koşularda toplananların oranıyla.
+# --------------------------------------------------------------------------- #
+FE_ITEMS = {"5140": "Memory Scrap", "5142": "Memory Thread - Magic", "5143": "Memory Thread - Rare",
+            "5144": "Memory Thread - Epic"}
+SCRAP_ID = "5140"
+THREAD_IDS = ("5142", "5143", "5144")
+THREAD_SHORT = {"5142": "M", "5143": "R", "5144": "E"}
+FE_DEFAULTS = {"scrap": 40.0, "thread": 2.0}    # fısıltısız bir koşuda taban Scrap / Thread (kayıt yokken)
+FE_BASE_RUNS = 10                                # taban sayılar bu kadar son koşudan
+FE_PRIOR_RUNS = 3      # az koşuda öğrenilen taban varsayılana çekilir (varsayılan bu kadar koşu sayılır)
+FE_KEYS = ("baseQ", "tQty", "appS", "qtyS", "flatS", "luckS", "multS", "appT", "qtyT", "flatT", "luckT", "multT")
+FE_FLAME_POOL = {   # kademe değerleri: Normal / Magic / Rare / Epic (tlidb Whisper_of_Wealth / _of_Wonder)
+    "wea": [("baseQ", (9, 14, 18, 36)),
+            ("appS", (14, 21, 28, 56)), ("qtyS", (35, 53, 70, 140)), ("flatS", (10, 15, 19, 39)),
+            ("luckS", (0.2 * 49, 0.2 * 73, 0.2 * 97, 0.2 * 194)),
+            ("appT", (35, 53, 70, 140)), ("qtyT", (21, 32, 42, 84)), ("flatT", (1, 1, 1, 2)),
+            ("luckT", (0.2 * 3, 0.2 * 4, 0.2 * 5, 0.2 * 10))],
+    "won": [("baseQ", (9, 14, 18, 36)), ("tQty", (14, 21, 28, 56)), ("rarity", (25, 37, 49, 98)),
+            ("multS", (21, 32, 42, 84)), ("multT", (21, 32, 42, 84))],
+}
+
+
+def fe_totals(effects):
+    t = {k: 0.0 for k in FE_KEYS}
+    for key, value, *_ in effects:
+        if key in t:
+            t[key] += value
+    return t
+
+
+def _fe_factors(t, suf):
+    """-> (tabana uygulanan çarpan, sabit + şanslı ek, en sonda her şeye uygulanan çarpan)"""
+    pre = (1 + t["baseQ"] / 100) * (1 + t["app" + suf] / 100) * (1 + t["qty" + suf] / 100)
+    post = (1 + t["tQty"] / 100) * (1 + t["mult" + suf] / 100)
+    return pre, t["flat" + suf] + t["luck" + suf], post
+
+
+def fe_expect(effects, s):
+    """-> {"scrap": beklenen Scrap, "thread": beklenen Thread}"""
+    t = fe_totals(effects)
+    out = {}
+    for x, suf in (("scrap", "S"), ("thread", "T")):
+        pre, add, post = _fe_factors(t, suf)
+        out[x] = (s["base"][x] * pre + add) * post
+    return out
+
+
+def fe_score(effects, s):
+    e = fe_expect(effects, s)
+    return e["scrap"] * s["unit"]["scrap"] + e["thread"] * s["unit"]["thread"]
+
+
+def is_fe_run(r):
+    """Memory materials (FE) planıyla yapılan koşu: Red sayfasına ve kırmızı modeline girmez
+    (Armament seçilmediği için Hero Memory sayısı o plana göre değil)."""
+    return r.get("plan") == "fe"
+
+
+def red_runs(runs):
+    """Red memories planının koşuları (plan alanı olmayan v6.6 öncesi koşular dahil)."""
+    return [r for r in runs if not is_fe_run(r)]
+
+
+def fe_runs(runs):
+    """Memory materials planıyla yapılan, toplanan Scrap/Thread sayısı bilinen ve sayımı tamamlanmış koşular."""
+    return [r for r in runs if "picks" in r and is_fe_run(r) and r.get("tracked", True)]
+
+
+def run_fe(r, prices):
+    """Bir koşuda toplananların net FE değeri (fiyatı bilinmeyenler sayılmaz)."""
+    return sum(n * prices[c] for c, n in r.get("picks", {}).items() if prices.get(c))
+
+
+def fe_model(runs, prices):
+    """FE planının ayarları. prices: {eşya: net FE (vergi düşülmüş)}; fiyatı bilinmeyen None.
+    -> {"base": {...}, "unit": {...}, "n_base": taban için kullanılan koşu, "mix": {thread: oran},
+        "missing": [fiyatı olmayan eşyalar]}"""
+    recent = fe_runs(runs)[-FE_BASE_RUNS:]
+    base = dict(FE_DEFAULTS)
+    if recent:
+        for x, suf in (("scrap", "S"), ("thread", "T")):
+            vals = []
+            for r in recent:
+                got = r["picks"].get(SCRAP_ID, 0) if x == "scrap" else sum(r["picks"].get(c, 0) for c in THREAD_IDS)
+                pre, add, post = _fe_factors(fe_totals(run_whispers(r["effects"])), suf)
+                vals.append(max(0.0, (got / post - add) / pre))
+            # tek bir koşu (çok çarpanlı ya da şanssız) tabanı bozmasın: varsayılanla ağırlıklı ortalama
+            base[x] = (sum(vals) + FE_PRIOR_RUNS * FE_DEFAULTS[x]) / (len(vals) + FE_PRIOR_RUNS)
+    mix = {c: sum(r["picks"].get(c, 0) for r in recent) for c in THREAD_IDS}
+    if not sum(mix.values()):
+        mix = {"5144": 1}               # henüz Thread toplanmadı: Epic varsayılır (yüksek seviyede hepsi Epic)
+    priced = {c: n for c, n in mix.items() if n and prices.get(c)}
+    missing = [FE_ITEMS[c] for c in [SCRAP_ID] + [c for c, n in mix.items() if n] if not prices.get(c)]
+    thread_v = sum(n * prices[c] for c, n in priced.items()) / sum(priced.values()) if priced else 0.0
+    total = sum(mix.values())
+    return {"base": base, "unit": {"scrap": prices.get(SCRAP_ID) or 0.0, "thread": thread_v},
+            "n_base": len(recent), "mix": {c: n / total for c, n in mix.items() if n}, "missing": missing}
+
+
+def fe_flame_advice(picked, s, tiers=None):
+    """FE planında Wealth mi Wonder mı: o kalitedeki fısıltıların ortalama FE katkısı.
+    -> (en iyi tür | "tie" | None, {tür: (ortalama FE artışı, yüzde)})"""
+    return flame_advice(picked, s, tiers, pool=FE_FLAME_POOL, score=fe_score)
+
+
+def fe_change(before, effs, s):
+    e0, e1 = fe_expect(before, s), fe_expect(before + effs, s)
+    parts = []
+    if e1["scrap"] - e0["scrap"] > 0.05:
+        parts.append(f"Scrap {e0['scrap']:.0f}→{e1['scrap']:.0f}")
+    if e1["thread"] - e0["thread"] > 0.005:
+        parts.append(f"Thread {e0['thread']:.1f}→{e1['thread']:.1f}")
+    return ", ".join(parts) or "no effect on Scrap / Thread"
+
+
+def fe_reason_cards(picked, cards, best, gains, labels, s):
+    if not cards:
+        return ""
+    if best is None:
+        return "Why: none of the cards adds Scrap or Threads."
+    order = sorted(range(len(gains)), key=lambda i: -gains[i][0])
+    if best == "tie":
+        a, b = order[0], order[1]
+        return f"Why: {labels[a]} ({gains[a][0]:+.1f} FE) and {labels[b]} ({gains[b][0]:+.1f} FE) are almost equal."
+    txt = f"Why: {labels[best]} → {fe_change(picked, cards[best][1], s)}; {gains[best][0]:+.1f} FE per run."
+    if len(order) > 1:
+        o = order[1]
+        txt += f" {labels[o]} only {gains[o][0]:+.1f} FE ({fe_change(picked, cards[o][1], s)})."
+    return txt
+
+
+def fe_reason_flame(picked, out, best, tiers=None):
+    if best is None:
+        return "Why: neither flame adds FE."
+    txt = (f"Why: on average a {flame_label('wea', tiers)} whisper adds {out['wea'][0]:+.1f} FE, "
+           f"a {flame_label('won', tiers)} whisper {out['won'][0]:+.1f} FE "
+           f"(Wonder multiplies what you already have; its Rarity kind counts as 0).")
+    if best == "tie":
+        txt += " Their averages are almost the same."
+    return txt
 
 
 # --------------------------------------------------------------------------- #
@@ -1064,7 +1286,10 @@ def describe_learned(info):
 
 
 SHORT_NAMES = {"appear": "Appear", "memQty": "Mem qty", "flat": "Flat", "luck": "Lucky", "baseQ": "Base qty",
-               "tQty": "Treasure", "rarity": "Rarity", "rep": "Replication", "none": "None"}
+               "tQty": "Treasure", "rarity": "Rarity", "rep": "Replication", "none": "None",
+               "appS": "Scrap app.", "qtyS": "Scrap qty", "flatS": "Scrap flat", "luckS": "Scrap lucky",
+               "multS": "Scrap ×", "appT": "Thread app.", "qtyT": "Thread qty", "flatT": "Thread flat",
+               "luckT": "Thread lucky", "multT": "Thread ×"}
 COMPARE_MIN_RUNS = 5     # bir türün olduğu ve olmadığı koşulardan en az bu kadar yoksa sonuç "az veri"
 
 
@@ -1289,6 +1514,28 @@ class VoidSeaState:
         best, gains = recommend(picked, self.cards, s)
         return reason_cards(picked, self.cards, best, gains, labels, s)
 
+    # FE planı (Wealth + Wonder): s = fe_model(...)
+    def _picked(self):
+        return [e for _, effs in self.picked for e in effs]
+
+    def fe_advice(self, s):
+        if len(self.picked) >= 6:
+            return None, []
+        return recommend(self._picked(), self.cards, s, score=fe_score)
+
+    def fe_flame(self, s):
+        return fe_flame_advice(self._picked(), s, self.tiers)
+
+    def fe_reason(self, s, labels):
+        picked = self._picked()
+        if self.mode == "flame":
+            best, out = self.fe_flame(s)
+            return fe_reason_flame(picked, out, best, self.tiers)
+        if self.mode != "cards" or len(self.picked) >= 6:
+            return ""
+        best, gains = self.fe_advice(s)
+        return fe_reason_cards(picked, self.cards, best, gains, labels, s)
+
 
 # --------------------------------------------------------------------------- #
 # Koşu kaydı: her Void Sea koşusunun fısıltıları + düşen kırmızı (Ultimate) memory sayısı
@@ -1348,19 +1595,30 @@ class RunLog:
             keys = list(totals([]).keys())
             with open(self.csv_path, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f, delimiter=";")
-                w.writerow(["date", "red", "memories_picked_up"] + keys + ["whispers"])
+                w.writerow(["date", "red", "memories_picked_up"] + keys + ["whispers", "memory_scrap",
+                            "thread_magic", "thread_rare", "thread_epic"])
                 for r in self.runs:
                     t = totals([tuple(e) for e in r["effects"]])
+                    p = r.get("picks")              # v6.6 öncesi koşularda yok: boş bırak
                     w.writerow([r["t"], r["red"], r["memories"]] + [f"{t[k]:g}" for k in keys]
-                               + [describe(run_whispers(r["effects"]))])
+                               + [describe(run_whispers(r["effects"]))]
+                               + ([p.get(c, 0) for c in (SCRAP_ID,) + THREAD_IDS] if p is not None else [""] * 4))
         except OSError:
             pass
 
     def start(self, effs):
         self.runs.append({"t": time.strftime("%Y-%m-%d %H:%M"), "effects": [[k, v] for k, v, *_ in effs],
-                          "red": 0, "memories": 0, "tracked": False})
+                          "red": 0, "memories": 0, "tracked": False, "picks": {},
+                          "plan": self.settings.get("vs_plan", "red")})
         self.active = True
         self.save()
+
+    def on_pick(self, cid, n):
+        """Void Sea haritasında çantaya Memory Scrap / Thread girdi (FE planı): n adet."""
+        if self.active and self.runs and cid in FE_ITEMS and n > 0:
+            p = self.runs[-1].setdefault("picks", {})
+            p[cid] = p.get(cid, 0) + n
+            self.save()
 
     def on_level(self):
         if self.active:          # koşu bitti: sayım eksiksiz, kayda göre modeli güncelle
@@ -1400,10 +1658,11 @@ class RunLog:
         import json
         try:
             s = {k: float(self.settings.get(k, v)) for k, v in DEFAULTS.items()}
-            info = fit_model(self.runs, s)
+            runs = red_runs(self.runs)
+            info = fit_model(runs, s)
             if info["active"]:
                 s["fit"] = info
-            combos = optimal_combo(self.runs, s)
+            combos = optimal_combo(runs, s)
             info["target"], info["target_x"] = combos[0]
             info["alts"] = combos[1:]
         except Exception:
@@ -1428,9 +1687,11 @@ class RunLog:
         return self.runs[-1] if self.runs else None
 
     def stats(self):
-        n = len(self.runs)
-        red = sum(r["red"] for r in self.runs)
-        mem = sum(r["memories"] for r in self.runs)
+        """Red memories planının özet sayıları (Memory materials koşuları hariç)."""
+        runs = red_runs(self.runs)
+        n = len(runs)
+        red = sum(r["red"] for r in runs)
+        mem = sum(r["memories"] for r in runs)
         return n, red, (red / n if n else 0.0), mem, (mem / n if n else 0.0)
 
 

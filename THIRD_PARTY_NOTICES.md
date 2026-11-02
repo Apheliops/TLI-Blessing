@@ -5,6 +5,8 @@
 `items.json` (item ID → item name table) is derived from the item seed data of
 [TITrack](https://github.com/astockman99/TITrack) (Torchlight Infinite Local Loot Tracker),
 which is published under the MIT License (as stated in the project's README and `pyproject.toml`).
+The app also downloads the latest version of that seed file from TITrack's GitHub repository once a day
+(`userdata/items_extra.json`) so that items added in new seasons get their names and icons.
 
 ```
 MIT License

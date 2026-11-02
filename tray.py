@@ -170,7 +170,9 @@ class Tray:
     """pystray ile sistem tepsisi simgesi. on_open/on_quit başka thread'den çağrılır."""
 
     def __init__(self, image, on_action, version=""):
-        """on_action(ad): "open" | "check_update" | "restart" | "folder" | "quit" (başka thread'den çağrılır)."""
+        """on_action(ad): "open" | "check_update" | "restart" | "folder" | "bug" | "quit" | "menu"
+        (başka thread'den çağrılır). "menu": sağ tık — uygulama kendi (koyu temalı) menüsünü açar;
+        bu yakalanamazsa Windows'un düz menüsü yedek olarak açılır."""
         self.icon = None
         self.ok = False
         try:
@@ -181,16 +183,34 @@ class Tray:
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Check for updates", act("check_update")),
                 pystray.MenuItem("Restart", act("restart")),
+                pystray.MenuItem("Open the data folder", act("folder")),
+                pystray.MenuItem("Report a bug", act("bug")),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem(f"Version {version}", None, enabled=False),
-                pystray.MenuItem("Open the data folder", act("folder")),
                 pystray.MenuItem("Quit", act("quit")),
             )
             self.icon = pystray.Icon("tli_blessing", image, "TLI Blessing Helper", menu)
+            self._hook_right_click(on_action)
             self.icon.run_detached()
             self.ok = True
         except Exception:
             self.icon = None
+
+    def _hook_right_click(self, on_action):
+        """Windows: sağ tıkta pystray'in düz menüsü yerine uygulamanın menüsü (WM_RBUTTONUP = 0x0205)."""
+        try:
+            from pystray import _win32 as pw
+            handlers = self.icon._message_handlers
+            orig = handlers[pw.win32.WM_NOTIFY]
+
+            def on_notify(wparam, lparam):
+                if lparam == 0x0205:
+                    on_action("menu")
+                    return 0
+                return orig(wparam, lparam)
+            handlers[pw.win32.WM_NOTIFY] = on_notify
+        except Exception:
+            pass
 
     def notify(self, text, title="TLI Blessing Helper"):
         """Windows bildirimi (tepsi simgesinden); desteklenmezse sessizce geç."""

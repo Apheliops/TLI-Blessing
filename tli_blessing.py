@@ -15,6 +15,7 @@ Kullanım:
   python tli_blessing.py --replay LOG    -> log'u bir kez işler, özet yazar (test)
 """
 import json
+import math
 import os
 import queue
 import re
@@ -42,7 +43,7 @@ DEFAULT_SETTINGS = {
     "min_profit_pct": 0.0,       # "AL" demek için gereken minimum kâr %
     "always_on_top": True,
     "auto_ocr": True,            # yenilemede ekranı otomatik oku
-    "autostart": True,           # Windows açılışında gizli başlat
+    "autostart": False,          # Windows açılışında gizli başlat (v6.6: yeni kurulumda kapalı; ayarı olan değişmez)
     "monitor": 1,                # oyunun açık olduğu ekran (1 = ana ekran)
     "tesseract_path": "",
     # Hariç tutulanlar (isim parçası veya ID)
@@ -59,10 +60,110 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.5"
+APP_VERSION = "6.6"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
+ISSUES_NEW_URL = "https://github.com/Apheliops/TLI-Blessing/issues/new"
+# Topluluk fiyatları (isteğe bağlı, varsayılan kapalı): Cloudflare Worker, kodu server\ klasöründe.
+# Gönderilen: rastgele kurulum numarası + eşya numarası + fiyat + zaman. Başka hiçbir şey.
+PRICES_API = "https://tli-prices.tli-blessing.workers.dev/v1/prices"
+PRICE_SHARE_EVERY = 120          # sn: öğrenilen yeni fiyatlar en fazla bu sıklıkta gönderilir
+# Geliştiricinin kendi kurulumu: bu dosya varsa içindeki anahtar gönderilir, sunucu bu fiyatları beklemeden yayınlar.
+# Dosya sadece geliştiricinin bilgisayarında (kurulum klasörü değil, zip'e / GitHub'a girmez).
+OWNER_KEY_FILE = os.path.join(os.environ.get("APPDATA", ""), "TLI_Blessing_Helper", "owner_key.txt")
+
+
+def owner_key():
+    try:
+        with open(OWNER_KEY_FILE, encoding="utf-8") as f:
+            k = f.read().strip()
+        return k if re.fullmatch(r"[0-9a-f]{64}", k) else None
+    except OSError:
+        return None
+PRICE_FETCH_EVERY = 30 * 60      # sn: ortak fiyatlar bu sıklıkta indirilir
+
+# Envanter sekmesindeki eşya simgeleri: tlidb.com'daki eşya sayfasından bir kez indirilir, userdata\icons'ta saklanır
+ICON_DIR = os.path.join(USER_DIR, "icons")
+ICON_PX = 20
+TLIDB_ICON_RX = re.compile(r'<img src="(https://cdn\.tlidb\.com/UI/Textures/[^"]+?\.(?:webp|png))"[^>]*class="ui_item_base')
+ICON_RETRY_DAYS = 7
+
+
+def icon_path(cid):
+    return os.path.join(ICON_DIR, f"{cid}.png")
+
+
+def icon_wanted(cid):
+    """Simge indirilmeli mi: dosya yoksa ve son 7 günde bulunamamış olarak işaretlenmediyse."""
+    if os.path.isfile(icon_path(cid)):
+        return False
+    miss = os.path.join(ICON_DIR, f"{cid}.none")
+    return not (os.path.isfile(miss) and time.time() - os.path.getmtime(miss) < ICON_RETRY_DAYS * 86400)
+
+
+def fetch_icon(cid, name, px=ICON_PX, out=None, img_url=None):
+    """tlidb.com/en/<Eşya_Adı> sayfasındaki ilk eşya simgesini indirip küçük PNG olarak kaydeder
+    (out verilmezse icon_path(cid)). img_url (eşya listesindeki tlidb simge adresi) varsa sayfa aranmaz.
+    Sadece eşyanın adı gönderilir. Bulunamazsa <cid>.none bırakılır (bir hafta tekrar denenmez)."""
+    out = out or icon_path(cid)
+    import io
+    import urllib.parse
+    import urllib.request
+    os.makedirs(ICON_DIR, exist_ok=True)
+    head = {"User-Agent": f"TLI-Blessing-Helper/{APP_VERSION}"}
+    try:
+        src = img_url if img_url and TLIDB_IMG_RX.fullmatch(img_url) else None
+        # oyundaki ad bazen küçük harfli ("Netherrealm resonance"); tlidb sayfası kelimeleri büyük harfle başlatıyor
+        for cand in () if src else dict.fromkeys((name, " ".join(w[:1].upper() + w[1:] for w in name.split()))):
+            slug = urllib.parse.quote(cand.replace(" ", "_"), safe="_'-(),.")
+            try:
+                with urllib.request.urlopen(urllib.request.Request("https://tlidb.com/en/" + slug, headers=head),
+                                            timeout=10) as r:
+                    m = TLIDB_ICON_RX.search(r.read().decode("utf-8", "replace"))
+            except OSError:
+                m = None
+            if m:
+                src = m.group(1)
+                break
+        if not src:
+            raise ValueError("icon not found")
+        with urllib.request.urlopen(urllib.request.Request(src, headers=head), timeout=10) as r:
+            raw = r.read(2_000_000)
+        from PIL import Image
+        img = Image.open(io.BytesIO(raw)).convert("RGBA").resize((px, px), Image.LANCZOS)
+        tmp = out + ".tmp"
+        img.save(tmp, "PNG")
+        os.replace(tmp, out)
+        return True
+    except Exception:
+        try:
+            open(os.path.join(ICON_DIR, f"{cid}.none"), "w").close()
+        except OSError:
+            pass
+        return False
+
+
+def tint_icon(img, color, px):
+    """Renkli simgeyi sekme işaretine çevirir: tek renk (sekme yazısının rengi), şekil ve iç detaylar
+    parlaklıktan (koyu yerler daha saydam). Kenardaki boşluk kırpılır."""
+    from PIL import Image, ImageChops
+    img = img.convert("RGBA")
+    box = img.getchannel("A").point(lambda a: 255 if a > 40 else 0).getbbox()
+    if box:
+        img = img.crop(box)
+    w, h = img.size
+    side = max(w, h)
+    sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    sq.paste(img, ((side - w) // 2, (side - h) // 2))
+    sq = sq.resize((px, px), Image.LANCZOS)
+    r, g, b, a = sq.split()
+    lum = Image.merge("RGB", (r, g, b)).convert("L").point(lambda v: int(90 + 165 * min(1.0, v / 200)))
+    alpha = ImageChops.multiply(lum, a)          # saydamlık × parlaklık
+    rgb = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+    out = Image.new("RGBA", sq.size, rgb + (0,))
+    out.putalpha(alpha)
+    return out
 
 
 def version_tuple(s):
@@ -216,10 +317,106 @@ def load_items():
 
 
 ITEM_NAMES = load_items()
+
+# Eşya tablosu güncel kalsın: items.json sürümle gelir, yeni sezonun eşyaları için TITrack'in (MIT) tlidb'den
+# derlediği güncel liste günde bir indirilir (userdata\items_extra.json: ad + tlidb simge adresi).
+# Listede hiç olmayan eşyalara oyuncu kendisi ad verebilir (userdata\item_names.json); bu adlar en önce gelir.
+ITEMS_SEED_URL = "https://raw.githubusercontent.com/astockman99/TITrack/master/tlidb_items_seed_en.json"
+ITEMS_EXTRA_FILE = os.path.join(USER_DIR, "items_extra.json")
+ITEM_NAMES_USER_FILE = os.path.join(USER_DIR, "item_names.json")
+ITEMS_REFRESH_EVERY = 24 * 3600
+ITEM_IMGS = {}           # eşya id -> tlidb simge adresi (varsa simge sayfa aranmadan doğrudan indirilir)
+USER_NAMED = set()       # adını oyuncunun verdiği eşyalar (sadece bunların adı değiştirilebilir)
+TLIDB_IMG_RX = re.compile(r"https://cdn\.tlidb\.com/UI/Textures/[\w/.-]+\.(?:webp|png)")
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def apply_item_extras():
+    """İndirilmiş güncel listeyi ve oyuncunun verdiği adları ITEM_NAMES / ITEM_IMGS'e işler."""
+    for cid, it in (_read_json(ITEMS_EXTRA_FILE).get("items") or {}).items():
+        if isinstance(it, dict):
+            if isinstance(it.get("n"), str) and it["n"].strip():
+                ITEM_NAMES[str(cid)] = it["n"].strip()
+                USER_NAMED.discard(str(cid))
+            if isinstance(it.get("img"), str) and TLIDB_IMG_RX.fullmatch(it["img"]):
+                ITEM_IMGS[str(cid)] = it["img"]
+    for cid, n in _read_json(ITEM_NAMES_USER_FILE).items():
+        # eşya artık listedeyse listedeki ad kullanılır
+        if isinstance(n, str) and n.strip() and (str(cid) not in ITEM_NAMES or str(cid) in USER_NAMED):
+            ITEM_NAMES[str(cid)] = n.strip()[:60]
+            USER_NAMED.add(str(cid))
+
+
+def refresh_item_list(force=False):
+    """Güncel eşya listesini indirir (son indirmeden 24 saat geçtiyse). -> True: liste yenilendi.
+    Hiçbir bilgi gönderilmez, sadece GitHub'daki dosya okunur."""
+    if not force:
+        try:
+            if time.time() - os.path.getmtime(ITEMS_EXTRA_FILE) < ITEMS_REFRESH_EVERY:
+                return False
+        except OSError:
+            pass
+    import urllib.request
+    try:
+        req = urllib.request.Request(ITEMS_SEED_URL, headers={"User-Agent": f"TLI-Blessing-Helper/{APP_VERSION}"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            seed = json.loads(r.read(8_000_000).decode("utf-8"))
+        out = {}
+        for it in seed.get("items") or []:
+            cid = str(it.get("id") or "")
+            if not re.fullmatch(r"\d{1,9}", cid):
+                continue
+            row = {}
+            if isinstance(it.get("name_en"), str) and it["name_en"].strip():
+                row["n"] = it["name_en"].strip()[:80]
+            if isinstance(it.get("img"), str) and TLIDB_IMG_RX.fullmatch(it["img"]):
+                row["img"] = it["img"]
+            if row:
+                out[cid] = row
+        if len(out) < 500:                       # bozuk/yarım dosya: eskisi kalsın
+            raise ValueError("item list too short")
+        os.makedirs(USER_DIR, exist_ok=True)
+        tmp = ITEMS_EXTRA_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"ts": int(time.time()), "items": out}, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, ITEMS_EXTRA_FILE)
+        return True
+    except Exception:
+        try:                                      # başarısız deneme de sayılsın: her açılışta tekrar denenmesin
+            if os.path.isfile(ITEMS_EXTRA_FILE):
+                os.utime(ITEMS_EXTRA_FILE, None)
+        except OSError:
+            pass
+        return False
+
+
+def save_item_name(cid, name):
+    """Oyuncunun listede olmayan bir eşyaya verdiği ad. -> False: ad boş."""
+    name = " ".join((name or "").split())[:60]
+    if not name:
+        return False
+    names = _read_json(ITEM_NAMES_USER_FILE)
+    names[str(cid)] = name
+    ITEM_NAMES[str(cid)] = name
+    USER_NAMED.add(str(cid))
+    os.makedirs(USER_DIR, exist_ok=True)
+    tmp = ITEM_NAMES_USER_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(names, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, ITEM_NAMES_USER_FILE)
+    return True
 # Blessings dükkânında hiç satılmayan eşyalar: OCR'ın yakın-isim eşleşmesi bunlara düşmesin, listeye girmesin.
 # (Elixir of Oblivion okunamayan bir kartın yazısından yanlış eşleşip listeye eklenmişti.)
 NOT_IN_BLESSINGS = {"5011", "6011"}          # Elixir of Oblivion, Bound Elixir of Oblivion
 BLESSING_NAMES = {k: v for k, v in ITEM_NAMES.items() if k not in NOT_IN_BLESSINGS}
+apply_item_extras()        # Blessings eşleşmesi sürümle gelen tabloyla kalır; envanter güncel adları kullanır
 
 USER_FILES = ["tli_blessing_data.json", "rakamlar.json", "voidsea_kayit.json", "voidsea_kayit.csv",
               "voidsea_kayit.yedek.json", "voidsea_model.json", "son_tarama.png", "son_tarama_voidsea.png",
@@ -456,6 +653,14 @@ RX_PRICE = re.compile(r"\+\d+ \[([0-9.eE+-]+)\]\s*$")
 RX_CUR = re.compile(r"\+currency \[(\d+)\]")
 RX_FUNC = re.compile(r"CheckFuncDownloaded FuncId = (\d+)")
 BLESSINGS_FUNC = "2003"     # oyunun "Blessings from Gods" özelliğinin numarası
+PICK_IDS = ("5140", "5142", "5143", "5144")   # Memory Scrap, Memory Thread Magic/Rare/Epic (Void Sea FE planı)
+# Envanter: "Sort Order" sayfayı "Reset PageId=102" + bütün eşyaları yazar, ardından 4 sayfanın tam dökümü
+# (InitBagData) gelir; oyuna girişte de aynı döküm var. Sayfalar oyundaki sekmeler:
+RX_RESET = re.compile(r"ItemChange@ Reset PageId=(-?\d+)")
+# Exchange'de satılamayan eşyalar: fiyatı yok, "fiyat eksik" sayılmaz (Flame Residue: Trader'da Flame Sand'e
+# çevrilir; Memory Thread - Normal: Normal hafızaları bozunca çıkar)
+NOT_TRADEABLE = {"100400", "5141"}
+INV_PAGES = {"102": "Commodity", "103": "Others", "101": "Skill"}   # Gear (100) yok: rastgele özellikli, fiyatlanamıyor
 
 
 def ts_of(line):
@@ -484,9 +689,22 @@ class Parser:
         self.last_ts = None
         self.last_func = None    # son açılan oyun özelliğinin numarası (CheckFuncDownloaded FuncId)
         self.in_blessings = False
+        self.bag_burst = None    # InitBagData dökümü sürüyorsa: dökümde görülen sayfalar
 
     def reset(self):
         self.__init__(self.emit)
+
+    def _emit_inv(self):
+        """Envanterin 4 sayfası: {sayfa: {eşya: toplam adet}} (aynı eşyanın yığınları toplanır)."""
+        pages = {p: {} for p in INV_PAGES}
+        for (page, _slot), (cid, num) in self.slots.items():
+            if page in pages and num > 0:
+                pages[page][cid] = pages[page].get(cid, 0) + num
+        self.emit("inv", {"ts": self.last_ts or time.time(), "pages": pages})
+
+    def _clear_page(self, page):
+        for key in [k for k in self.slots if k[0] == page]:
+            del self.slots[key]
 
     def _change(self, page, slot, cid, num, op="Update"):
         """Değişim miktarı; bilinemiyorsa None (daha önce görülmemiş bir yığın güncellendiyse)."""
@@ -508,6 +726,9 @@ class Parser:
 
     def feed(self, line):
         line = line.rstrip("\r\n")
+        if self.bag_burst is not None and "InitBagData" not in line:    # envanter dökümü bitti
+            self.bag_burst = None
+            self._emit_inv()
         t = ts_of(line)
         if t:
             self.last_ts = t
@@ -557,6 +778,11 @@ class Parser:
                 else:
                     self._finish_proto(name, self.proto_changes)
                     self.proto, self.proto_changes = None, []
+                    self._emit_inv()
+                return
+            m = RX_RESET.search(line)
+            if m:                       # "Sort Order": sayfa baştan yazılacak (eşyalar yer değiştiriyor)
+                self._clear_page(m.group(1))
                 return
             m = RX_CHANGE.search(line)
             if m:
@@ -577,6 +803,12 @@ class Parser:
             m = RX_BAG.search(line)
             if m:
                 page, slot, cid, num = m.groups()
+                if "InitBagData" in line:           # tam döküm: o sayfanın eski hâli silinir
+                    if self.bag_burst is None:
+                        self.bag_burst = set()
+                    if page not in self.bag_burst:
+                        self.bag_burst.add(page)
+                        self._clear_page(page)
                 key = (page, slot)
                 self.slots[key] = [cid, int(num)]
                 if cid == DS:
@@ -609,6 +841,11 @@ class Parser:
             spent = -sum(d for c, d in changes if c == DS and d is not None and d < 0)
             self.emit("refresh", {"ts": ts, "ds": spent})
             self.emit("shop", {"ts": ts, "why": "refresh"})
+        elif name == "PickItems":
+            # Void Sea FE planı: yerden alınan Memory Scrap / Thread (yığın sayısının artışı)
+            for cid, d in changes:
+                if cid in PICK_IDS and d and d > 0:
+                    self.emit("pick", {"ts": ts, "cid": cid, "n": d})
 
     def _finish_block(self, kind, syn, lines):
         if kind == "send":
@@ -621,14 +858,20 @@ class Parser:
         cid = self.pending_search.pop(syn, None)
         if not cid:
             return
+        # İki biçim: eskisinde önce fiyatlar sonra "+currency [100300]"; Tartarus sezonunda (2026-11-02) önce
+        # "+prices+1+currency [100300]" sonra fiyatlar. Fiyatlardan sonra gelen para birimi bloğun sonudur.
         prices, started, cur = [], False, None
         for l in lines:
-            if "unitPrices" in l:
-                started = True
             mc = RX_CUR.search(l)
             if mc:
+                if prices and cur is not None:      # yeni biçim: sıradaki para biriminin fiyatları başlıyor
+                    break
                 cur = mc.group(1)
-                break
+                if prices:                          # eski biçim: fiyatlar bitti
+                    break
+                continue
+            if "unitPrices" in l:
+                started = True
             if started:
                 mp = RX_PRICE.search(l)
                 if mp:
@@ -649,6 +892,7 @@ class Engine:
         self.purchases = []
         self.refreshes = []
         self.ds_balance = None
+        self.community = {}      # topluluk fiyatları {eşya: {"p", "n", "t"}}: sadece kendi fiyatı olmayanlarda
 
     @property
     def s(self):
@@ -666,7 +910,8 @@ class Engine:
             return 1.0
         p = self.data["prices"].get(str(cid))
         if not p:
-            return None
+            c = self.community.get(str(cid))      # kendi aramadığın eşya: topluluk fiyatı (açıksa)
+            return c["p"] if c else None
         lst = p["prices"]
         n = {"cheap1": 1, "cheap3": 3, "cheap5": 5}.get(self.s.get("price_mode"), 3)
         lst = lst[:n] if len(lst) >= n else lst
@@ -934,7 +1179,7 @@ def run_gui(start_hidden=False):
     data = load_data()
     i18n.set_lang(data["settings"].get("ui_lang", "en"))
     eng = Engine(data)
-    set_autostart(bool(data["settings"].get("autostart", True)))
+    set_autostart(bool(data["settings"].get("autostart", False)))
     st = {"tailer": None, "dirty": True, "status": "Starting…", "last_save": 0}
 
     root = tk.Tk()
@@ -951,6 +1196,38 @@ def run_gui(start_hidden=False):
     GOOD, WARN, BAD = "#22C55E", "#F59E0B", "#EF4444"
     ROW_A, ROW_B, ROW_HOVER = "#0F172A", "#111C2F", "#1C2A42"
     F_UI, F_NUM = "Segoe UI", "Bahnschrift"          # Bahnschrift: rakamlar için dar, okunaklı (Windows'ta hazır)
+    TAB_HOVER, TAB_HOVER_FG = "#161F2E", "#CBD5E1"     # seçili olmayan sekmenin üzerine gelince
+    # tek renk çizgi simgeler (kamera, böcek, menü simgeleri): Windows 11'de Fluent, 10'da MDL2; yoksa simgesiz
+    ICON_FONT = next((f for f in ("Segoe Fluent Icons", "Segoe MDL2 Assets") if f in tkfont.families(root)), None)
+
+    def hover_tab(widgets, is_active, off_bg, hover_bg, off_fg=None, hover_fg=None):
+        """Tarayıcı sekmesi gibi: seçili olmayan sekmenin üzerine gelince zemin (ve yazı) biraz aydınlanır."""
+        def paint(on):
+            if is_active():
+                return
+            for w in widgets:
+                try:
+                    w.config(bg=hover_bg if on else off_bg)
+                    if off_fg and isinstance(w, tk.Label):
+                        w.config(fg=hover_fg if on else off_fg)
+                except tk.TclError:
+                    pass
+        for w in widgets:
+            w.bind("<Enter>", lambda e: paint(True), add="+")
+            w.bind("<Leave>", lambda e: paint(False), add="+")
+
+    def icon_button(parent, glyph, text, cmd, bg, fg, size=9):
+        """Simge + yazı tek düğme (ikisine de tıklanır)."""
+        fr = tk.Frame(parent, bg=bg, cursor="hand2")
+        parts = []
+        if glyph and ICON_FONT:
+            parts.append(tk.Label(fr, text=glyph, bg=bg, fg=fg, font=(ICON_FONT, size), cursor="hand2"))
+        parts.append(T(tk.Label(fr, bg=bg, fg=fg, font=("Segoe UI", size, "bold"), cursor="hand2"), text))
+        for i, w in enumerate(parts):
+            w.pack(side="left", padx=(6 if i == 0 else 3, 6 if i == len(parts) - 1 else 0), pady=2)
+        for w in [fr] + parts:
+            w.bind("<Button-1>", lambda e: cmd())
+        return fr
     root.configure(bg=BG)
     style = ttk.Style(root)
     try:
@@ -1065,7 +1342,7 @@ def run_gui(start_hidden=False):
         if not p:
             btn_eye.config(text="")
         elif eye_mdl:
-            btn_eye.config(text="" if on else "")     # açık göz / üstü çizili göz
+            btn_eye.config(text="\uE7B3" if on else "\uED1A")     # açık göz / üstü çizili göz
         else:
             btn_eye.config(text="👁" if on else "◌")
 
@@ -1098,27 +1375,88 @@ def run_gui(start_hidden=False):
     nb = tk.Frame(root, bg=BG)
     tab_ds = tk.Frame(nb, bg=BG)
     tab_vs = tk.Frame(nb, bg=BG)
+    tab_inv = tk.Frame(nb, bg=BG)
+
+    # Sekme işaretleri: DS Calculator'da uygulamanın simgesi, Inventory value'da tlidb'deki Flame Elementium simgesi.
+    # İkisi de sekme yazısının rengine boyanır (seçili değilken gri, seçiliyken açık) ki temaya uysun.
+    TAB_ICON_PX = 16
+    TAB_FE_PATH = os.path.join(ICON_DIR, "tab_flame_elementium.png")
+    tab_imgs = {}
     main_tabs = {}
+
+    def set_tab_icon(key, pil):
+        try:
+            from PIL import ImageTk
+            tab_imgs[key] = {c: ImageTk.PhotoImage(tint_icon(pil, c, TAB_ICON_PX), master=root) for c in (MUTED, FG)}
+        except Exception:
+            return
+        if key in main_tabs:
+            main_tabs[key][1].config(image=tab_imgs[key][FG if st.get("main_tab") == key else MUTED], compound="left")
+
+    def load_tab_icons():
+        try:
+            import tray as TR
+            img = TR.app_icon(data["settings"].get("log_path", ""))
+            if img is not None:
+                set_tab_icon("ds", img)
+        except Exception:
+            pass
+        if os.path.isfile(TAB_FE_PATH):
+            try:
+                from PIL import Image
+                set_tab_icon("inv", Image.open(TAB_FE_PATH))
+                return
+            except Exception:
+                pass
+
+        def get():          # ilk açılışta bir kez indirilir (büyük boy: küçültünce net dursun)
+            if fetch_icon("tab_fe", "Flame Elementium", px=64, out=TAB_FE_PATH):
+                q.put(("tab_icon", "inv"))
+        threading.Thread(target=get, daemon=True).start()
 
     def show_main_tab(key):
         for k, (fr, lb, line_) in main_tabs.items():
             on = k == key
             lb.config(fg=FG if on else MUTED, bg=SURF if on else BG)
+            if k in tab_imgs:
+                lb.config(image=tab_imgs[k][FG if on else MUTED])
             line_.config(bg=PRI if on else BG)
             fr.pack_forget()
         main_tabs[key][0].pack(fill="both", expand=True)
+        st["main_tab"] = key
+        if key == "inv":
+            render_inv()
 
-    for key, txt, fr in (("ds", "◈  DS Calculator", tab_ds), ("vs", "◎  Void Sea Terminal", tab_vs)):
+    for key, txt, fr in (("ds", " DS Calculator", tab_ds), ("vs", "◎  Void Sea Terminal", tab_vs),
+                         ("inv", " Inventory value", tab_inv)):
         cell = tk.Frame(tabbar, bg=BG)
         cell.pack(side="left", padx=(0, 2))
-        lb = T(tk.Label(cell, bg=BG, fg=MUTED, font=(F_UI, 10, "bold"), padx=16, pady=7, cursor="hand2"), txt)
+        lb = T(tk.Label(cell, bg=BG, fg=MUTED, font=(F_UI, 10, "bold"), padx=16, pady=7, cursor="hand2",
+                        compound="left"), txt)
         lb.pack()
         line_ = tk.Frame(cell, bg=BG, height=2)
         line_.pack(fill="x")
         lb.bind("<Button-1>", lambda e, k=key: show_main_tab(k))
         main_tabs[key] = (fr, lb, line_)
+        hover_tab([cell, lb], lambda k=key: st.get("main_tab") == k, BG, TAB_HOVER, MUTED, TAB_HOVER_FG)
+    load_tab_icons()
 
-    # --- Void Sea Terminal sekmesi: her koşuda seçilen fısıltılar ve kazanılan memory'ler ---
+    # --- Void Sea Terminal sekmesi: plan seçimi. Overlay'in Void Sea önerisi de seçili plana göre ---
+    plan_bar = tk.Frame(tab_vs, bg=BG)
+    plan_bar.pack(fill="x", pady=(12, 0))
+    T(tk.Label(plan_bar, bg=BG, fg=MUTED, font=(F_UI, 9)), "Plan").pack(side="left", padx=(0, 8))
+    plan_lbls = {}
+    for key, txt in (("red", "Red memories · Armament + Wonder"), ("fe", "Memory materials · Wealth + Wonder")):
+        lb = T(tk.Label(plan_bar, bg=SURF, fg=MUTED, font=(F_UI + " Semibold", 9), padx=12, pady=4, cursor="hand2",
+                        highlightthickness=1, highlightbackground=BORDER), txt)
+        lb.pack(side="left", padx=(0, 6))
+        lb.bind("<Button-1>", lambda e, k=key: show_plan(k))
+        plan_lbls[key] = lb
+        hover_tab([lb], lambda k=key: data["settings"].get("vs_plan", "red") == k, SURF, "#1A2A40", MUTED,
+                  TAB_HOVER_FG)
+    T(tk.Label(plan_bar, bg=BG, fg=MUTED, font=(F_UI, 8)), "The overlay advises for this plan.").pack(side="left", padx=6)
+
+    # --- Kırmızı planı sayfası: her koşuda seçilen fısıltılar ve kazanılan memory'ler ---
     vs_top = tk.Frame(tab_vs, bg=BG)
     vs_top.pack(fill="x", pady=(12, 10))
     vs_kpis = {}
@@ -1127,12 +1465,13 @@ def run_gui(start_hidden=False):
         card = tk.Frame(vs_top, bg=SURF, highlightthickness=1, highlightbackground=BORDER)
         card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
         vs_top.columnconfigure(i, weight=1, uniform="vkpi")
-        T(tk.Label(card, bg=SURF, fg=MUTED, font=(F_UI, 8), anchor="w"), cap).pack(fill="x", padx=10, pady=(8, 0))
+        c = T(tk.Label(card, bg=SURF, fg=MUTED, font=(F_UI, 8), anchor="w"), cap)
+        c.pack(fill="x", padx=10, pady=(8, 0))
         v = tk.Label(card, text="—", bg=SURF, fg=BAD if key == "red" else FG, font=(F_NUM + " SemiBold", 17), anchor="w")
         v.pack(fill="x", padx=10)
         s = tk.Label(card, text="", bg=SURF, fg=MUTED, font=(F_UI, 8), anchor="w")
         s.pack(fill="x", padx=10, pady=(0, 8))
-        vs_kpis[key] = (v, s)
+        vs_kpis[key] = (v, s, c)
     # Koşu başına Hero Memory grafiği (son 20 koşu, en yeni sağda)
     _chart_card, fr_chart = panel(tab_vs, "Hero Memories per run",
                                   "Last 20 runs, newest on the right. The dashed line is your average. "
@@ -1188,6 +1527,7 @@ def run_gui(start_hidden=False):
         lb.bind("<Enter>", lambda e, k=k: low_state["key"] != k and seg_lbls[k][1].config(fg=FG))
         lb.bind("<Leave>", lambda e, k=k: low_state["key"] != k and seg_lbls[k][1].config(fg=MUTED))
         seg_lbls[k] = (cell, lb, line_)
+        hover_tab([cell, lb, line_], lambda k=k: low_state["key"] == k, TAB_OFF, "#16233A")
 
     tvw = ttk.Treeview(fr_cmp, columns=("k", "n", "with", "wo", "model", "conf", "red"), show="headings", height=5,
                        selectmode="none")
@@ -1227,6 +1567,118 @@ def run_gui(start_hidden=False):
     tvr.pack(fill="both", expand=True)
     run_rows = {}
     show_low("runs")
+
+    # --- Inventory value sekmesi: oyundaki 4 envanter sekmesi, eşyalar toplam FE değerine göre ---
+    inv_head = tk.Frame(tab_inv, bg=BG)
+    inv_head.pack(fill="x", pady=(12, 8))
+    var_comm = tk.BooleanVar(value=bool(data["settings"].get("community_prices", False)))
+    T(tk.Checkbutton(inv_head, variable=var_comm, command=lambda: toggle_community(), bg=BG, fg=FG, selectcolor=SURF2,
+                     activebackground=BG, activeforeground=FG, font=(F_UI, 9), highlightthickness=0),
+      "Share prices").pack(side="right")
+    lbl_inv_total = tk.Label(inv_head, text="—", bg=BG, fg=ACC, font=(F_NUM + " SemiBold", 20), anchor="w")
+    lbl_inv_total.pack(side="left")
+    lbl_inv_sub = tk.Label(inv_head, text="", bg=BG, fg=MUTED, font=(F_UI, 9), anchor="w", justify="left")
+    lbl_inv_sub.pack(side="left", padx=12)
+    inv_box = tk.Frame(tab_inv, bg=SURF, highlightthickness=1, highlightbackground=BORDER)
+    inv_box.pack(fill="both", expand=True, pady=(0, 8))
+    inv_seg = tk.Frame(inv_box, bg=SURF)
+    inv_seg.pack(fill="x", padx=12, pady=(9, 0))
+    lbl_inv_hint = tk.Label(inv_box, text="", bg=SURF, fg=MUTED, font=(F_UI, 8), anchor="w", justify="left",
+                            wraplength=680)
+    lbl_inv_hint.pack(fill="x", padx=12, pady=(4, 0))
+    inv_fr = tk.Frame(inv_box, bg=SURF)
+    inv_fr.pack(fill="both", expand=True, padx=12, pady=(6, 10))
+    tvinv = ttk.Treeview(inv_fr, columns=("n", "unit", "total"), show="tree headings", height=14, selectmode="none")
+    tvinv.heading("#0", text=tr("Item"), anchor="w")
+    tvinv.column("#0", width=300, anchor="w", stretch=True)
+    for c, t, w in (("n", "Count", 80), ("unit", "Price (FE)", 100), ("total", "Total (FE)", 110)):
+        H(tvinv, c, t, anchor="e")
+        tvinv.column(c, width=w, anchor="e", stretch=False)
+    tree_colors(tvinv)
+    tvinv.tag_configure("np", foreground=MUTED)
+    tvinv.tag_configure("top", foreground=ACC)
+    sbinv = ttk.Scrollbar(inv_fr, orient="vertical", command=tvinv.yview, style="Dark.Vertical.TScrollbar")
+    tvinv.configure(yscrollcommand=sbinv.set)
+    sbinv.pack(side="right", fill="y")
+    tvinv.pack(fill="both", expand=True)
+    inv_tabs = {}
+    inv_state = {"page": "102"}
+
+    def show_inv_page(page):
+        inv_state["page"] = page
+        render_inv()
+
+    for page, name in INV_PAGES.items():
+        cell = tk.Frame(inv_seg, bg=TAB_OFF, highlightthickness=1, highlightbackground=BORDER, cursor="hand2")
+        cell.pack(side="left", padx=(0, 6))
+        lb = tk.Label(cell, text=tr(name), bg=TAB_OFF, fg=MUTED, font=(F_UI + " Semibold", 10), padx=14, pady=5,
+                      cursor="hand2")
+        lb.pack()
+        line_ = tk.Frame(cell, bg=TAB_OFF, height=2)
+        line_.pack(fill="x")
+        for w in (cell, lb):
+            w.bind("<Button-1>", lambda e, p=page: show_inv_page(p))
+        inv_tabs[page] = (cell, lb, line_)
+        hover_tab([cell, lb, line_], lambda p=page: inv_state["page"] == p, TAB_OFF, "#16233A", MUTED, TAB_HOVER_FG)
+
+    # İki plan da aynı sayfayı kullanır (kartlar, grafik, koşu geçmişi); FE planında içerik FE'ye göre değişir.
+    def retext(w, en, opt="text"):
+        """Plana göre değişen sabit yazı: dil değişince de doğru metin çevrilsin (static_txt güncellenir)."""
+        for k, (ww, o, _en) in enumerate(static_txt):
+            if ww is w and o == opt:
+                static_txt[k] = (ww, o, en)
+        if isinstance(opt, tuple):
+            w.heading(opt[1], text=tr(en))
+        else:
+            w.configure(**{opt: tr(en)})
+
+    chart_title = _chart_card.winfo_children()[0].winfo_children()[0]
+    chart_sub = _chart_card.winfo_children()[1]
+    RED_RUNS_SUB = low_views["runs"][2]
+
+    def fe_mode():
+        return data["settings"].get("vs_plan") == "fe"
+
+    def apply_plan_view():
+        fe = fe_mode()
+        for key, red_cap, fe_cap in (("mem", "Hero Memories", "FE earned"), ("red", "Red memories", "FE per run")):
+            retext(vs_kpis[key][2], fe_cap if fe else red_cap)
+            vs_kpis[key][0].config(fg=ACC if fe else (BAD if key == "red" else FG))
+        retext(chart_title, "FE per run" if fe else "Hero Memories per run")
+        retext(chart_sub, "Last 20 runs of this plan, newest on the right: Memory Scrap and Thread picked up, at your "
+                          "Exchange prices after tax. The dashed line is your average. Click a bar to open that run."
+               if fe else "Last 20 runs, newest on the right. The dashed line is your average. "
+                          "Click a bar to open that run.")
+        retext(tvr, "Scrap / Thread" if fe else "Memories", ("heading", "mem"))
+        retext(tvr, "FE" if fe else "Red", ("heading", "red"))
+        tvr.column("wh", width=150 if fe else 190)
+        tvr.column("mem", width=100 if fe else 76)
+        tvr.column("red", width=54 if fe else 44)
+        cmp_cell = seg_lbls["cmp"][0]
+        if fe:                    # fısıltı türleri karşılaştırması kırmızı planına ait
+            cmp_cell.pack_forget()
+            if low_state["key"] == "cmp":
+                show_low("runs")
+        elif not cmp_cell.winfo_ismapped():
+            cmp_cell.pack(side="left", padx=(0, 6))
+        if not fe:
+            low_views["runs"] = (fr_runs, "Run history", RED_RUNS_SUB)
+            if low_state["key"] == "runs":
+                lbl_low_sub.config(text=tr(RED_RUNS_SUB))
+        st["runs_sig"] = None
+
+    def show_plan(key, save=True):
+        """Plan değişince sayfa da değişir; overlay'in önerisi ve alev ekranındaki tür çifti de."""
+        data["settings"]["vs_plan"] = key
+        VS.FLAME_PAIR = ("wea", "won") if key == "fe" else ("arm", "won")
+        for k, lb in plan_lbls.items():
+            on = k == key
+            lb.config(bg=TAB_ON if on else SURF, fg="#FFFFFF" if on else MUTED,
+                      highlightbackground=TAB_EDGE_ON if on else BORDER)
+        apply_plan_view()
+        if save:
+            save_data(data)
+            render_vs()
 
     # --- Üst bilgi: KPI kartları (karar verdiren rakamlar en önde) ---
     top = tk.Frame(tab_ds, bg=BG)
@@ -1450,9 +1902,10 @@ def run_gui(start_hidden=False):
     bot2.pack(fill="x", padx=16, pady=(0, 12), side="bottom")
     tk.Frame(root, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(0, 10), side="bottom")
     T(ttk.Button(bot2, command=lambda: quit_app()), "Quit app").pack(side="right")
+    icon_button(bot2, "\uEBE8", "Bug", lambda: open_bug_report(), SURF, FG).pack(side="right", padx=8, ipady=3)
     var_auto = tk.BooleanVar(value=bool(data["settings"].get("auto_ocr", True)))
 
-    var_boot = tk.BooleanVar(value=bool(data["settings"].get("autostart", True)))
+    var_boot = tk.BooleanVar(value=bool(data["settings"].get("autostart", False)))
     var_upd = tk.BooleanVar(value=bool(data["settings"].get("check_updates", True)))
 
     def save_flags():
@@ -1477,11 +1930,15 @@ def run_gui(start_hidden=False):
 
     # Arayüz dili: sadece görünen yazılar değişir (ekran okuma, log, CSV, hata raporu İngilizce kalır).
     # Seçince hemen uygulanır: sabit yazılar yerinde çevrilir, değişen bölümler yeniden çizilir.
-    T(tk.Label(bot2, bg=BG, fg=MUTED, font=(F_UI, 9)), "Language").pack(side="left", padx=(14, 0))
-    cb_lang = ttk.Combobox(bot2, values=[name for _, name in i18n.LANGS], state="readonly", width=9,
+    # (v6.6) sağ üstte, "Select log"un solunda
+    lang_fr = tk.Frame(logrow, bg=BG)
+    lang_fr.pack(side="right", anchor="n", padx=(0, 12), pady=3)
+    if ICON_FONT:
+        tk.Label(lang_fr, text="", bg=BG, fg=MUTED, font=(ICON_FONT, 10)).pack(side="left", padx=(0, 5))  # dünya
+    cb_lang = ttk.Combobox(lang_fr, values=[name for _, name in i18n.LANGS], state="readonly", width=9,
                            style="Dark.TCombobox", font=(F_UI, 9))
     cb_lang.set(dict(i18n.LANGS)[i18n.lang()])
-    cb_lang.pack(side="left", padx=6)
+    cb_lang.pack(side="left")
 
     def apply_lang(code):
         cb_lang.selection_clear()
@@ -2023,10 +2480,10 @@ def run_gui(start_hidden=False):
     # Alt çubuk: Ekran butonu + LOG ışığı + boyutlandırma tutamacı
     ov_foot = tk.Frame(ov, bg=OPANEL)
     ov_foot.pack(fill="x", side="bottom")
-    ov_btn = T(tk.Label(ov_foot, bg="#10303F", fg=PRI, font=("Segoe UI", 9, "bold"),
-                        cursor="hand2", padx=6, pady=2), " Read ")
-    ov_btn.pack(side="left", padx=6, pady=4)
-    ov_btn.bind("<Button-1>", lambda e: vs_scan() if ov_state_tab["tab"] == "vs" else start_scan("manual"))
+    ov_btn = icon_button(ov_foot, "\uE722", "Read", lambda: vs_scan() if ov_state_tab["tab"] == "vs"
+                         else start_scan("manual"), "#10303F", PRI)       # \uE722: kamera
+    ov_btn.pack(side="left", padx=(6, 4), pady=4)
+    icon_button(ov_foot, "\uEBE8", "Bug", lambda: open_bug_report(), OPANEL, MUTED).pack(side="left", pady=4)
     ov_grip = tk.Label(ov_foot, text="◢", bg=OPANEL, fg=MUTED, cursor="size_nw_se", font=("Segoe UI", 9))
     ov_grip.pack(side="right", padx=(2, 3))
     # Picture ışığı: ekran okuma (OCR) çalışıyor mu — yeşil: son okuma başarılı / okuyucu hazır, kırmızı: hata
@@ -2178,7 +2635,10 @@ def run_gui(start_hidden=False):
                     exe = pbuf.value.lower()
                 k32.CloseHandle(h)
             if pid.value == os.getpid():
-                return False                                  # bizim büyük pencere
+                # bizim büyük pencere: panel gizlenir. Açılır menü, Bug formu, onay penceresi gibi küçük
+                # pencerelerimiz panelin durumunu değiştirmesin (önceden plan menüsü açılınca panel kayboluyordu)
+                root_ids = {root.winfo_id(), u32.GetParent(root.winfo_id()), u32.GetAncestor(root.winfo_id(), 2)}
+                return False if hwnd in root_ids else None
             # oyunu programın yolundan tanı: başlıkta "Torchlight" geçen tarayıcı sekmesi
             # (ör. Reddit'teki bir rehber) oyun sanılmasın. Başlık sadece yol okunamazsa yedek.
             if exe:
@@ -2339,7 +2799,25 @@ def run_gui(start_hidden=False):
     vs = VS.VoidSeaState()
     vs_log = VS.RunLog(user_file("voidsea_runs.json"), data["settings"])   # koşu başına fısıltılar + kırmızı sayısı
     vs_st = {"scanning": False, "msg": "Open the Void Sea Terminal or press “Read”.", "watcher": None}
-    VS_COL = {"arm": ACC, "won": PRI, "wea": MUTED, "boss": MUTED, "?": MUTED}
+
+    # İki plan: "red" (Armament + Wonder: kırmızı Hero Memory) ve "fe" (Wealth + Wonder: Scrap/Thread'in FE değeri)
+    def fe_plan():
+        return data["settings"].get("vs_plan", "red") == "fe"
+
+    def fe_prices():
+        """Scrap / Thread'in net fiyatı (FE, satış vergisi düşülmüş); Exchange'de aranmadıysa None."""
+        tax = float(data["settings"].get("tax", 0.2))
+        out = {}
+        for c in VS.FE_ITEMS:
+            p = eng.ref_price(c)
+            out[c] = p * (1 - tax) if p else None
+        return out
+
+    def fe_s():
+        return VS.fe_model(vs_log.runs, fe_prices())
+
+    show_plan(data["settings"].get("vs_plan", "red"), save=False)
+    VS_COL = {"arm": ACC, "won": PRI, "wea": GOOD, "boss": MUTED, "?": MUTED}
     VS_PICKED = "#c3a6ff"                    # seçilmiş fısıltılar: Armament/Wonder renklerinden ayrı, açık mor
     VS_WHY = "#ff9ad5"                       # önerinin gerekçesi: diğer renklerden ayrı, pembe
 
@@ -2387,24 +2865,42 @@ def run_gui(start_hidden=False):
         r = vs_log.runs[i]
         wh = VS.run_whispers(r["effects"])
         run_detail.config(highlightbackground=PRI)        # detay seçili koşuya ait: tabloyla aynı cyan vurgu
-        detail_card(f"Run {i + 1}  ·  {r['t'][5:]}", f"{r['memories']} memories  ·  {r['red']} red",
-                    BAD if r["red"] else PRI, [(VS.EFFECT_NAMES.get(k, k), f"{v:g}") for k, v in wh],
-                    "" if wh else "Whispers were not read for this run.")
+        rows = [(VS.EFFECT_NAMES.get(k, k), f"{v:g}") for k, v in wh]
+        if fe_mode() and "picks" in r:
+            p = r["picks"]
+            th = "  ·  ".join(f"{q} {p.get(c, 0)}" for c, q in zip(VS.THREAD_IDS, ("Magic", "Rare", "Epic")))
+            note = (f"Picked up: {p.get(VS.SCRAP_ID, 0)} Scrap\nThread: {th}"
+                    + ("" if wh else "\nWhispers were not read for this run.")
+                    + ("\nIn progress: the count is final when you leave the map." if fe_live(i) else ""))
+            detail_card(f"Run {i + 1}  ·  {r['t'][5:]}", f"{VS.run_fe(r, fe_prices()):.1f} FE  ·  "
+                        f"{p.get(VS.SCRAP_ID, 0)} Scrap", ACC, rows, note)
+        else:
+            detail_card(f"Run {i + 1}  ·  {r['t'][5:]}", f"{r['memories']} memories  ·  {r['red']} red",
+                        BAD if r["red"] else PRI, rows, "" if wh else "Whispers were not read for this run.")
         draw_chart()
 
     def draw_chart():
-        """Son 20 koşunun memory sayısı: çubuk grafik, ortalama kesikli çizgi. Kırmızı çıkan koşu kırmızı çubuk."""
+        """Son 20 koşu: çubuk grafik, ortalama kesikli çizgi. Kırmızı planında memory sayısı (kırmızı çıkan koşu
+        kırmızı çubuk), FE planında koşuda toplanan Scrap / Thread'in FE değeri."""
         chart.delete("all")
-        runs = vs_log.runs[-20:]
-        first = len(vs_log.runs) - len(runs) + 1
+        fe = fe_mode()
+        if fe:
+            prices = fe_prices()
+            items = [(i, VS.run_fe(vs_log.runs[i], prices), 0) for i in fe_run_ids()[-20:]]
+            done = [VS.run_fe(vs_log.runs[i], prices) for i in fe_run_ids()
+                    if vs_log.runs[i].get("tracked", True) and not fe_live(i)]
+        else:
+            items = [(i, vs_log.runs[i]["memories"], vs_log.runs[i]["red"]) for i in red_run_ids()[-20:]]
+            done = [r["memories"] for r in VS.red_runs(vs_log.runs) if r.get("tracked")]
         w, h = chart.winfo_width(), int(chart.cget("height"))
         if w < 50:
             return
-        if not runs:
+        if not items:
             chart.create_text(w // 2, h // 2, text=tr("No runs yet"), fill=MUTED, font=(F_UI, 9))
+            chart_geo.update(n=0)
             return
         left, bottom, top_ = 28, h - 18, 24
-        hi = max(4, max(r["memories"] for r in runs))
+        hi = max(4, math.ceil(max(v for _, v, _ in items)))
         step = max(1, -(-hi // 4))                 # 4 civarı yatay çizgi
         hi = step * -(-hi // step)
         y = lambda v: bottom - (bottom - top_) * v / hi
@@ -2413,36 +2909,40 @@ def run_gui(start_hidden=False):
             chart.create_text(left - 6, y(v), text=str(v), fill=MUTED, font=(F_NUM, 8), anchor="e")
         slot = (w - left) / 20
         bw = max(6, slot * 0.62)
-        chart_geo.update(left=left, slot=slot, first=first - 1, n=len(runs))
+        chart_geo.update(left=left, slot=slot, ids=[i for i, _, _ in items], n=len(items))
         sel = st.get("sel_run")
-        for j, r in enumerate(runs):
+        label = (lambda v: f"{v:.0f}" if v >= 10 else f"{v:.1f}") if fe else str
+        for j, (i, val, red) in enumerate(items):
             x0 = left + slot * j + (slot - bw) / 2
-            live = j == len(runs) - 1 and vs_log.active
-            on = first - 1 + j == sel
-            col = BAD if r["red"] else PRI
+            live = i == len(vs_log.runs) - 1 and vs_log.active
+            on = i == sel
+            col = BAD if red else PRI
             if on:      # seçili koşunun sütunu: arkada hafif zemin, çubuk açık renk ve beyaz kenarlı
                 chart.create_rectangle(left + slot * j + 1, top_ - 6, left + slot * (j + 1) - 1, bottom,
                                        fill="#16304A", outline="")
-                col = "#FF8A8A" if r["red"] else "#9BE7FF"
-            if r["memories"]:
-                chart.create_rectangle(x0, y(r["memories"]), x0 + bw, bottom, fill="" if live else col,
+                col = "#FF8A8A" if red else "#9BE7FF"
+            if val:
+                chart.create_rectangle(x0, y(val), x0 + bw, bottom, fill="" if live else col,
                                        outline="#FFFFFF" if on else col, width=2 if on else (1 if live else 0))
             elif on:
                 chart.create_line(x0, bottom - 1, x0 + bw, bottom - 1, fill="#FFFFFF", width=2)
-            chart.create_text(x0 + bw / 2, y(r["memories"]) - 7, text=str(r["memories"]),
+            chart.create_text(x0 + bw / 2, y(val) - 7, text=label(val),
                               fill="#FFFFFF" if on else MUTED, font=(F_NUM + (" SemiBold" if on else ""), 8))
-            if len(runs) <= 10 or j % 2 == (len(runs) - 1) % 2:    # sıkışmasın: en yeniden geriye ikişer
-                chart.create_text(x0 + bw / 2, bottom + 9, text=str(first + j), fill=MUTED, font=(F_NUM, 8))
-        tracked = [r["memories"] for r in vs_log.runs if r.get("tracked")]
-        if tracked:
-            avg = sum(tracked) / len(tracked)
+            if len(items) <= 10 or j % 2 == (len(items) - 1) % 2:    # sıkışmasın: en yeniden geriye ikişer
+                chart.create_text(x0 + bw / 2, bottom + 9, text=str(i + 1), fill=MUTED, font=(F_NUM, 8))
+        if done:
+            avg = sum(done) / len(done)
             chart.create_line(left, y(avg), w, y(avg), fill=ACC, dash=(4, 3))
-            chart.create_text(left + 4, 4, text=tr(f"average {avg:.1f} per run"), fill=ACC, font=(F_NUM, 8), anchor="nw")
+            # sağ üstte: soldaki çubukların üstündeki sayılarla çakışmasın
+            chart.create_text(w - 4, 4, text=tr(f"average {avg:.1f} FE per run" if fe else
+                                                f"average {avg:.1f} per run"),
+                              fill=ACC, font=(F_NUM, 8), anchor="ne")
 
     def render_cmp():
         tvw.delete(*tvw.get_children())
-        rows = VS.whisper_stats(vs_log.runs, data["settings"])
-        done, left_out = VS.valid_runs(vs_log.runs)
+        runs = VS.red_runs(vs_log.runs)          # Memory materials koşuları karşılaştırmaya girmez
+        rows = VS.whisper_stats(runs, data["settings"])
+        done, left_out = VS.valid_runs(runs)
         n_red = sum(r["red"] for r in done)
         red_ok = n_red >= VS.RED_MIN_TOTAL
         f1 = lambda v: "—" if v is None else f"{v:.1f}"
@@ -2467,9 +2967,9 @@ def run_gui(start_hidden=False):
         labels = [d["confidence"] for d in rows if d["confidence"] not in (None, "Insufficient")]
         order = ["Low", "Preliminary", "Good"]
         overall = min(labels, key=order.index) if labels else "Insufficient"
-        combos = VS.combo_stats(vs_log.runs)
+        combos = VS.combo_stats(runs)
         lines = [("Analysis summary", FG, True),
-                 (f"{len(done)} of {len(vs_log.runs)} runs used  ·  {sum(r['memories'] for r in done)} Hero Memories"
+                 (f"{len(done)} of {len(runs)} runs used  ·  {sum(r['memories'] for r in done)} Hero Memories"
                   f"  ·  {n_red} red", FG, False)]
         for r, why in left_out:
             lines.append((f"Left out: run {vs_log.runs.index(r) + 1} ({r['t'][5:]}): {why}", MUTED, False))
@@ -2489,13 +2989,696 @@ def run_gui(start_hidden=False):
             tk.Label(cmp_sum, text=tr(txt), bg=SURF2, fg=col, font=(F_UI, 9 if bold else 8, "bold" if bold else "normal"),
                      anchor="w", justify="left", wraplength=640).pack(fill="x", padx=10, pady=(4 if bold else 0, 0))
 
+    # ======================= KOYU AÇILIR MENÜ =======================
+    # Tepsi simgesinin sağ tık menüsü ve overlay'deki plan seçimi. Windows'un düz beyaz menüsü yerine
+    # uygulamanın renkleri: koyu lacivert zemin (hafif dikey geçiş), ince kenar, yuvarlak köşe (Windows 11),
+    # üzerine gelince solda cyan çizgi; Quit üzerine gelince sıcak koyu ton.
+    MENU = {"bg_top": "#101A2B", "bg_bot": "#0C1421", "head": "#0B121D", "border": "#22324A", "hover": "#16304A",
+            "accent": "#2BC3FF", "text": "#E6EEF8", "sub": "#8FA6C0", "off": "#5B6B80", "icon": "#9FCBFF",
+            "icon_on": "#D8F1FF", "quit_bg": "#2A1A1A", "quit_fg": "#FFB3B3"}
+    menu_state = {"win": None}
+
+    def close_menu(_e=None):
+        w = menu_state.get("win")
+        menu_state["win"] = None
+        if w is not None:
+            try:
+                w.destroy()
+            except tk.TclError:
+                pass
+
+    def dark_menu(items, x, y, header=None, width=248, up=False, focus=True):
+        """items: [(kind, metin, simge, komut)]; kind: "item" | "quit" | "sep" | "info".
+        header: (başlık, sağdaki küçük yazı, alt satır) ya da None. up=True: menü imlecin üstüne açılır (tepsi).
+        focus=False: odağı almaz (overlay'deki menü: oyun ön planda kalsın, panel gizlenmesin)."""
+        close_menu()
+        win = tk.Toplevel(root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=MENU["border"])
+        menu_state["win"] = win
+        ROW, SEP, PAD, HEAD = 36, 11, 14, (54 if header and header[2] else 40) if header else 0
+        h = 8 + HEAD + sum(SEP if k == "sep" else ROW for k, *_ in items) + 6
+        cv = tk.Canvas(win, width=width, height=h, highlightthickness=0, bd=0, bg=MENU["bg_top"])
+        cv.pack(padx=1, pady=1)
+        # zemin: yukarıdan aşağı hafif koyulaşan geçiş
+        a, b = [tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c in (MENU["bg_top"], MENU["bg_bot"])]
+        for yy in range(0, h, 2):
+            t = yy / max(1, h - 1)
+            cv.create_line(0, yy, width, yy, width=2,
+                           fill="#%02x%02x%02x" % tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3)))
+        yy = 4
+        if header:
+            cv.create_rectangle(4, yy, width - 4, yy + HEAD - 4, fill=MENU["head"], outline="")
+            ph = st.get("menu_icon")
+            tx = PAD
+            if ph is not None:
+                cv.create_image(PAD, yy + 12, image=ph, anchor="nw")
+                tx = PAD + 24
+            cv.create_text(tx, yy + 20, text=tr(header[0]), fill=MENU["text"], font=("Segoe UI Semibold", 10), anchor="w")
+            cv.create_text(width - PAD, yy + 20, text=tr(header[1]), fill=MENU["sub"], font=("Segoe UI", 9), anchor="e")
+            if header[2]:
+                cv.create_text(tx, yy + 38, text=tr(header[2]), fill=MENU["sub"], font=("Segoe UI", 8), anchor="w")
+            yy += HEAD
+        rows = []
+        for kind, text, glyph, cmd in items:
+            if kind == "sep":
+                cv.create_line(12, yy + SEP // 2, width - 12, yy + SEP // 2, fill=MENU["border"])
+                yy += SEP
+                continue
+            y0 = yy
+            bg = cv.create_rectangle(6, y0 + 2, width - 6, y0 + ROW - 2, fill="", outline="")
+            bar = cv.create_rectangle(6, y0 + 9, 9, y0 + ROW - 9, fill="", outline="")
+            fg = MENU["off"] if kind == "info" else MENU["text"]
+            ic = None
+            if glyph and ICON_FONT:
+                ic = cv.create_text(PAD + 8, y0 + ROW // 2, text=glyph, fill=MENU["off"] if kind == "info" else MENU["icon"],
+                                    font=(ICON_FONT, 11))
+            tx = cv.create_text(PAD + (26 if ICON_FONT else 0), y0 + ROW // 2, text=tr(text), fill=fg,
+                                font=("Segoe UI", 10), anchor="w")
+            if kind != "info":
+                rows.append((y0, y0 + ROW, kind, bg, bar, ic, tx, cmd))
+            yy += ROW
+        hover = {"row": None}
+
+        def paint(row, on):
+            y0, y1, kind, bg, bar, ic, tx, _cmd = row
+            quit_ = kind == "quit"
+            cv.itemconfig(bg, fill=(MENU["quit_bg"] if quit_ else MENU["hover"]) if on else "")
+            cv.itemconfig(bar, fill=MENU["accent"] if on and not quit_ else "")
+            cv.itemconfig(tx, fill=(MENU["quit_fg"] if quit_ else "#FFFFFF") if on else MENU["text"])
+            if ic is not None:
+                cv.itemconfig(ic, fill=(MENU["quit_fg"] if quit_ else MENU["icon_on"]) if on else MENU["icon"])
+
+        def at(ey):
+            return next((r for r in rows if r[0] <= ey < r[1]), None)
+
+        def motion(e):
+            r = at(e.y)
+            if r is not hover["row"]:
+                if hover["row"]:
+                    paint(hover["row"], False)
+                if r:
+                    paint(r, True)
+                hover["row"] = r
+            cv.config(cursor="hand2" if r else "")
+
+        def click(e):
+            r = at(e.y)
+            if r:
+                close_menu()
+                r[7]()
+
+        cv.bind("<Motion>", motion)
+        cv.bind("<Leave>", lambda e: hover["row"] and (paint(hover["row"], False), hover.update(row=None)))
+        cv.bind("<ButtonRelease-1>", click)
+        win.bind("<Escape>", close_menu)
+        win.update_idletasks()
+        W, Hh = width + 2, h + 2
+        sx, sy = root.winfo_screenwidth(), root.winfo_screenheight()
+        try:            # çalışma alanı (görev çubuğu hariç)
+            import ctypes
+            from ctypes import wintypes
+            rc = wintypes.RECT()
+            ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rc), 0)
+            wx0, wy0, wx1, wy1 = rc.left, rc.top, rc.right, rc.bottom
+        except Exception:
+            wx0, wy0, wx1, wy1 = 0, 0, sx, sy
+        px = x - W if up else x
+        py = y - Hh if up else y
+        px = max(wx0 + 4, min(px, wx1 - W - 4)) if x < wx1 else px
+        py = max(wy0 + 4, min(py, wy1 - Hh - 4)) if y < wy1 else py
+        win.geometry(f"{W}x{Hh}+{px}+{py}")
+        try:            # Windows 11: yuvarlak köşe + ince kenar rengi (eski Windows'ta etkisiz)
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(ctypes.c_int(2)), 4)
+            col = MENU["border"]
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 34, ctypes.byref(ctypes.c_int(int(col[5:7] + col[3:5] + col[1:3], 16))), 4)
+            if focus:
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+            else:       # oyunun üstündeki menü: odağı almasın (WS_EX_NOACTIVATE), oyun ön planda kalsın
+                GWL_EXSTYLE, WS_EX_NOACTIVATE = -20, 0x08000000
+                u = ctypes.windll.user32
+                u.SetWindowLongW(hwnd, GWL_EXSTYLE, u.GetWindowLongW(hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE)
+        except Exception:
+            pass
+        if focus:
+            win.focus_force()
+
+        def watch():
+            # dışarı tıklanınca kapan (odak tepsiden gelince FocusOut güvenilir değil)
+            if menu_state.get("win") is not win:
+                return
+            try:
+                import ctypes
+                down = any(ctypes.windll.user32.GetAsyncKeyState(k) & 0x8000 for k in (0x01, 0x02))
+                mx, my = root.winfo_pointerxy()
+                inside = px <= mx < px + W and py <= my < py + Hh
+                if down and not inside:
+                    close_menu()
+                    return
+            except Exception:
+                pass
+            win.after(80, watch)
+        win.after(250, watch)
+        return win
+
+    def show_tray_menu():
+        x, y = root.winfo_pointerxy()
+        upd = st.get("update")
+        log_kind = st.get("log", ("muted", ""))[0]
+        status = (f"Update {upd[0]} available" if upd else "Up to date") + " · " + \
+                 {"good": "log OK", "bad": "log not readable"}.get(log_kind, "log starting")
+        G = {"open": "\uE8A7", "upd": "\uE895", "restart": "\uE72C", "folder": "\uE838", "bug": "\uEBE8",
+             "quit": "\uE7E8"}
+        dark_menu([("item", "Open", G["open"], lambda: q.put(("tray", "open"))),
+                   ("sep", "", None, None),
+                   ("item", "Check for updates", G["upd"], lambda: q.put(("tray", "check_update"))),
+                   ("item", "Restart", G["restart"], lambda: q.put(("tray", "restart"))),
+                   ("item", "Open data folder", G["folder"], lambda: q.put(("tray", "folder"))),
+                   ("item", "Report a bug", G["bug"], lambda: open_bug_report()),
+                   ("sep", "", None, None),
+                   ("quit", "Quit", G["quit"], lambda: q.put(("tray", "quit")))],
+                  x, y, header=("TLI Blessing Helper", f"v{APP_VERSION}", status), up=True)
+
+    # ======================= HATA BİLDİRİMİ (Bug) =======================
+    # GitHub'a doğrudan gönderim için uygulamaya bir anahtar (token) gömmek gerekirdi; herkese açık olur.
+    # Bunun yerine: uygulamadaki form -> GitHub'ın Bug şablonu alanları doldurulmuş olarak tarayıcıda açılır
+    # (kullanıcı sadece "Submit"e basar). Hesabı olmayan için "Copy report": metin panoya kopyalanır.
+    BUG_PARTS = ["Blessings / DS Calculator", "Void Sea Seal (flames)", "Void Sea Terminal (cards)",
+                 "Run log / memory counting", "Inventory value", "Overlay / main window", "Setup / starting the app",
+                 "Other"]
+    bug_state = {"win": None}
+
+    def _mask_paths(text):
+        """Kullanıcı adını ve kişisel klasör yolunu rapordan çıkar."""
+        home = os.path.expanduser("~")
+        text = text.replace(home, "%USERPROFILE%").replace(home.replace("\\", "/"), "%USERPROFILE%")
+        user = os.path.basename(home)
+        return re.sub(re.escape(user), "<user>", text, flags=re.I) if len(user) >= 3 else text
+
+    def _error_tail(limit=2500):
+        for name in ("error_report.md", "error_log.txt"):
+            p = user_file(name)
+            if os.path.isfile(p):
+                try:
+                    with open(p, encoding="utf-8", errors="replace") as f:
+                        return _mask_paths(f.read()[-limit:])
+                except OSError:
+                    pass
+        return ""
+
+    def open_bug_report():
+        if bug_state["win"] is not None:
+            try:
+                bug_state["win"].deiconify()
+                bug_state["win"].lift()
+                return
+            except tk.TclError:
+                pass
+        win = tk.Toplevel(root, bg=BG)
+        bug_state["win"] = win
+        win.title(tr("Report a bug"))
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.protocol("WM_DELETE_WINDOW", lambda: (bug_state.update(win=None), win.destroy()))
+        try:
+            if st.get("win_icon"):
+                win.iconphoto(False, st["win_icon"])
+        except Exception:
+            pass
+        pad = dict(padx=18)
+        hdr = tk.Frame(win, bg=BG)
+        hdr.pack(fill="x", pady=(16, 4), **pad)
+        if ICON_FONT:
+            tk.Label(hdr, text="\uEBE8", bg=BG, fg=PRI, font=(ICON_FONT, 16)).pack(side="left", padx=(0, 10))
+        T(tk.Label(hdr, bg=BG, fg=FG, font=(F_UI, 14, "bold")), "Report a bug").pack(side="left")
+        tk.Label(hdr, text=f"v{APP_VERSION}", bg=BG, fg=MUTED, font=(F_UI, 9)).pack(side="right")
+        T(tk.Label(win, bg=BG, fg=MUTED, font=(F_UI, 9), justify="left", wraplength=470, anchor="w"),
+          "The more you fill in, the faster it can be fixed. Nothing is sent until you submit it on GitHub.").pack(
+            fill="x", **pad)
+
+        def field(label):
+            T(tk.Label(win, bg=BG, fg=FG, font=(F_UI, 9, "bold"), anchor="w"), label).pack(fill="x", pady=(12, 3), **pad)
+
+        field("Which part?")
+        part = ttk.Combobox(win, values=[tr(p) for p in BUG_PARTS], state="readonly", width=52,
+                            style="Dark.TCombobox", font=(F_UI, 10))
+        default_part = {"vs": 2, "inv": 4}.get(st.get("main_tab"), 0) if root.state() == "normal" else \
+            (2 if ov_state_tab["tab"] == "vs" else 0)
+        part.current(default_part)
+        part.pack(fill="x", **pad)
+        field("What happened, and what did you expect?")
+        what = tk.Text(win, height=6, width=56, bg=SURF2, fg=FG, insertbackground=FG, relief="flat",
+                       font=(F_UI, 10), wrap="word", highlightthickness=1, highlightbackground=BORDER,
+                       highlightcolor=PRI)
+        what.pack(fill="x", **pad)
+        field("Game resolution and window mode")
+        area = None
+        try:
+            import screen_reader as SR
+            area = SR.game_window_rect()
+        except Exception:
+            pass
+        screen = tk.Entry(win, bg=SURF2, fg=FG, insertbackground=FG, relief="flat", font=(F_UI, 10),
+                          highlightthickness=1, highlightbackground=BORDER, highlightcolor=PRI)
+        screen.insert(0, f"{area['width']}x{area['height']}, windowed" if area else "")
+        screen.pack(fill="x", ipady=4, **pad)
+        opts = tk.Frame(win, bg=BG)
+        opts.pack(fill="x", pady=(12, 0), **pad)
+        v_log = tk.BooleanVar(value=True)
+        v_shot = tk.BooleanVar(value=True)
+        for var, txt in ((v_log, "Add the app's error log (your user name is removed)"),
+                         (v_shot, "Save a screenshot of the game to attach")):
+            tk.Checkbutton(opts, text=tr(txt), variable=var, bg=BG, fg=FG, selectcolor=SURF2, activebackground=BG,
+                           activeforeground=FG, font=(F_UI, 9), anchor="w", highlightthickness=0).pack(fill="x")
+        lbl_status = tk.Label(win, text="", bg=BG, fg=MUTED, font=(F_UI, 9), justify="left", wraplength=470, anchor="w")
+        lbl_status.pack(fill="x", pady=(10, 0), **pad)
+
+        def report():
+            """-> (alanlar, düz metin rapor) ya da açıklama boşsa None."""
+            text = what.get("1.0", "end").strip()
+            if not text:
+                lbl_status.config(text=tr("Please describe what happened."), fg=WARN)
+                what.focus_set()
+                return None
+            f = {"version": f"v{APP_VERSION}", "part": BUG_PARTS[part.current()], "screen": screen.get().strip(),
+                 "what": text, "logs": _error_tail() if v_log.get() else ""}
+            plain = (f"Bug report — TLI Blessing Helper {f['version']}\nPart: {f['part']}\nScreen: {f['screen']}\n\n"
+                     f"{f['what']}\n" + (f"\nError log (end):\n{f['logs']}\n" if f["logs"] else ""))
+            return f, plain
+
+        def save_shot():
+            if not v_shot.get():
+                return None
+            try:
+                import screen_reader as SR
+                win.withdraw()
+                root.update()
+                time.sleep(0.15)
+                img = SR.grab_screen(int(data["settings"].get("monitor", 1)))
+                p = user_file("bug_screenshot.png")
+                img.save(p)
+                return p
+            except Exception:
+                return None
+            finally:
+                win.deiconify()
+
+        def send():
+            r = report()
+            if not r:
+                return
+            f, _plain = r
+            import urllib.parse
+            import webbrowser
+            title = f"[Bug] {f['part']}: {f['what'].splitlines()[0][:60]}"
+            params = {"template": "bug_report.yml", "title": title, "version": f["version"], "part": f["part"],
+                      "screen": f["screen"], "what": f["what"], "logs": f["logs"]}
+            url = ISSUES_NEW_URL + "?" + urllib.parse.urlencode(params)
+            if len(url) > 7500:             # GitHub uzun adresleri kesiyor: log kısaltılır
+                params["logs"] = f["logs"][-800:]
+                url = ISSUES_NEW_URL + "?" + urllib.parse.urlencode(params)
+            shot = save_shot()
+            webbrowser.open(url)
+            if shot:
+                try:
+                    os.startfile(USER_DIR)
+                except Exception:
+                    pass
+            lbl_status.config(fg=GOOD, text=tr("GitHub opened with your report filled in. Press “Submit new issue” there"
+                                               + (" and drag bug_screenshot.png from the opened folder into the "
+                                                  "Screenshots box." if shot else ".")))
+
+        def copy():
+            r = report()
+            if not r:
+                return
+            shot = save_shot()
+            root.clipboard_clear()
+            root.clipboard_append(r[1])
+            lbl_status.config(fg=GOOD, text=tr("Report copied. Paste it in a Reddit message or comment"
+                                               + (" (screenshot saved as userdata\\bug_screenshot.png)." if shot else ".")))
+
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(fill="x", pady=(12, 16), **pad)
+        T(ttk.Button(btns, style="Primary.TButton", command=send), "Open on GitHub").pack(side="left")
+        T(ttk.Button(btns, command=copy), "Copy report").pack(side="left", padx=8)
+        T(ttk.Button(btns, command=lambda: (bug_state.update(win=None), win.destroy())), "Cancel").pack(side="right")
+        T(tk.Label(win, bg=BG, fg=MUTED, font=(F_UI, 8), justify="left", wraplength=470, anchor="w"),
+          "“Open on GitHub” needs a GitHub account. No account? Use “Copy report” and send it on Reddit.").pack(
+            fill="x", pady=(0, 14), **pad)
+        win.update_idletasks()
+        x = root.winfo_pointerx() - win.winfo_width() // 2
+        y = root.winfo_pointery() - win.winfo_height() // 2
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        what.focus_set()
+
+    # ======================= ENVANTER DEĞERİ =======================
+    inv_imgs = {}
+    inv_blank = tk.PhotoImage(master=root, width=ICON_PX, height=ICON_PX)   # simgesi olmayan satır hizalı dursun
+    icon_q = queue.Queue()
+    icon_asked = set()
+
+    def icon_worker():
+        """Simgeler sırayla, yavaşça (siteyi yormadan) indirilir; biten her simge sayfayı yeniler."""
+        while True:
+            cid, name = icon_q.get()
+            if fetch_icon(cid, name, img_url=ITEM_IMGS.get(str(cid))):
+                q.put(("icon", cid))
+            time.sleep(0.4)
+
+    threading.Thread(target=icon_worker, daemon=True).start()
+
+    def item_list_tick():
+        """Güncel eşya listesi günde bir indirilir (yeni sezonun eşyaları adsız kalmasın)."""
+        def work():
+            if refresh_item_list():
+                q.put(("items", None))
+        threading.Thread(target=work, daemon=True).start()
+        root.after(6 * 3600 * 1000, item_list_tick)
+
+    root.after(4000, item_list_tick)
+    root.after(2000, lambda: (load_community_cache(), community_tick()))
+
+    def inv_icon(cid):
+        if cid in inv_imgs:
+            return inv_imgs[cid]
+        if os.path.isfile(icon_path(cid)):
+            try:
+                from PIL import Image, ImageTk
+                inv_imgs[cid] = ImageTk.PhotoImage(Image.open(icon_path(cid)), master=root)
+                return inv_imgs[cid]
+            except Exception:
+                return inv_blank
+        name = ITEM_NAMES.get(str(cid))
+        if (name or str(cid) in ITEM_IMGS) and cid not in icon_asked and icon_wanted(cid):
+            icon_asked.add(cid)
+            icon_q.put((cid, name or ""))
+        return inv_blank
+
+    def forget_icon_miss(cid):
+        """Eşyanın adı/simge adresi yeni öğrenildi: "bulunamadı" işareti silinsin, simge yeniden aransın."""
+        icon_asked.discard(cid)
+        try:
+            os.remove(os.path.join(ICON_DIR, f"{cid}.none"))
+        except OSError:
+            pass
+
+    def name_item_dialog(cid):
+        """Listede adı olmayan (yeni sezon) bir eşyaya oyuncu ad verir; simgesi de bu adla tlidb'de aranır."""
+        win = tk.Toplevel(root, bg=BG)
+        win.title(tr("Name this item"))
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.transient(root)
+        try:
+            if st.get("win_icon"):
+                win.iconphoto(False, st["win_icon"])
+        except Exception:
+            pass
+        pad = dict(padx=20)
+        T(tk.Label(win, bg=BG, fg=FG, font=(F_UI, 13, "bold"), anchor="w"), "Name this item").pack(
+            fill="x", pady=(18, 2), **pad)
+        T(tk.Label(win, bg=BG, fg=MUTED, font=(F_UI, 9), anchor="w", justify="left", wraplength=380),
+          "This item is new and not in the item list yet. Type its English name as shown in game "
+          "(hover it in your bag). The icon is then looked up on tlidb.").pack(fill="x", **pad)
+        ent = tk.Entry(win, bg=SURF2, fg=FG, insertbackground=FG, relief="flat", font=(F_UI, 10))
+        ent.pack(fill="x", pady=(12, 0), ipady=5, **pad)
+        cur = ITEM_NAMES.get(str(cid))
+        if cur:
+            ent.insert(0, cur)
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(fill="x", pady=(16, 18), **pad)
+
+        def save(_e=None):
+            try:
+                ok = save_item_name(cid, ent.get())
+            except OSError:
+                ok = False
+            if not ok:
+                ent.focus_set()
+                return
+            forget_icon_miss(cid)
+            inv_imgs.pop(cid, None)
+            win.destroy()
+            render_inv()
+        T(ttk.Button(btns, style="Primary.TButton", command=save), "Save").pack(side="right")
+        T(ttk.Button(btns, command=win.destroy), "Cancel").pack(side="right", padx=8)
+        ent.bind("<Return>", save)
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.update_idletasks()
+        x = root.winfo_rootx() + (root.winfo_width() - win.winfo_width()) // 2
+        y = root.winfo_rooty() + (root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        win.focus_force()
+        ent.focus_set()
+
+    def nameable(cid):
+        return bool(cid) and (cid not in ITEM_NAMES or cid in USER_NAMED)
+
+    def inv_menu(e):
+        cid = tvinv.identify_row(e.y)
+        if nameable(cid):
+            dark_menu([("item", "Name this item…", "", lambda: name_item_dialog(cid))],
+                      e.x_root, e.y_root, width=200)
+
+    def inv_double(e):
+        cid = tvinv.identify_row(e.y)
+        if nameable(cid):
+            name_item_dialog(cid)
+
+    tvinv.bind("<Button-3>", inv_menu)
+    tvinv.bind("<Double-1>", inv_double)
+
+    # ---- Topluluk fiyatları (isteğe bağlı): öğrenilen fiyatlar gönderilir, kendi fiyatı olmayanlar için ortak
+    # fiyat indirilir. Kapalıyken hiçbir istek yapılmaz.
+    COMMUNITY_FILE = user_file("community_prices.json")
+    share = {"pending": {}, "last_up": 0.0, "last_down": 0.0, "busy": False}
+
+    def community_on():
+        return bool(data["settings"].get("community_prices", False))
+
+    def install_id():
+        """Rastgele kurulum numarası (kişiyle ilişkisi yok); sunucu aynı kişinin fiyatını iki kez saymasın diye."""
+        iid = data["settings"].get("install_id")
+        if not (isinstance(iid, str) and re.fullmatch(r"[0-9a-f]{32}", iid)):
+            import uuid
+            iid = data["settings"]["install_id"] = uuid.uuid4().hex
+            save_data(data)
+        return iid
+
+    def clean_community(v):
+        """Sunucudan / dosyadan gelen ortak fiyatlar: sadece geçerli eşya no ve makul pozitif fiyat kalır
+        (bozuk bir cevap fiyat hesaplarını çökertmesin)."""
+        out = {}
+        if isinstance(v, dict):
+            for cid, it in v.items():
+                p = it.get("p") if isinstance(it, dict) else None
+                if (re.fullmatch(r"\d{1,9}", str(cid)) and isinstance(p, (int, float)) and not isinstance(p, bool)
+                        and 0 < p < 1e6):
+                    out[str(cid)] = {"p": float(p), "n": it.get("n") if isinstance(it.get("n"), int) else 0}
+        return out
+
+    def load_community_cache():
+        if not community_on():
+            eng.community = {}
+            return
+        try:
+            with open(COMMUNITY_FILE, encoding="utf-8") as f:
+                eng.community = clean_community(json.load(f).get("prices", {}))
+        except (OSError, ValueError, AttributeError):
+            eng.community = {}
+
+    def queue_share(v):
+        """Log'dan yeni öğrenilen fiyat (son 24 saatte görülmüş): bir sonraki gönderimde yollanır."""
+        if community_on() and v.get("prices") and abs(time.time() - v["ts"]) < 86400:
+            lst = v["prices"][:3]
+            share["pending"][str(v["cid"])] = (sum(lst) / len(lst), int(v["ts"]))
+
+    def _http(method, body=None):
+        import urllib.request
+        head = {"User-Agent": f"TLI-Blessing-Helper/{APP_VERSION}", "Content-Type": "application/json"}
+        key = owner_key() if method == "POST" else None
+        if key:
+            head["x-owner-key"] = key
+        req = urllib.request.Request(PRICES_API, method=method, data=json.dumps(body).encode() if body else None,
+                                     headers=head)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+
+    def community_tick():
+        """15 sn'de bir: gönderilecek fiyat varsa gönder (en fazla 2 dk'da bir), ortak fiyatları 30 dk'da bir indir."""
+        root.after(15000, community_tick)
+        if not community_on() or share["busy"]:
+            return
+        now = time.time()
+        up = share["pending"] if share["pending"] and now - share["last_up"] >= PRICE_SHARE_EVERY else None
+        down = now - share["last_down"] >= PRICE_FETCH_EVERY
+        if not up and not down:
+            return
+        if up:
+            share["pending"] = {}
+            share["last_up"] = now
+        if down:
+            share["last_down"] = now
+        share["busy"] = True
+        iid = install_id()
+
+        def work():
+            try:
+                if up:
+                    try:
+                        _http("POST", {"install": iid, "prices": [{"id": c, "p": p, "t": t} for c, (p, t) in up.items()]})
+                    except Exception:
+                        for c, pt in up.items():                     # gönderilemedi: sonra tekrar dene
+                            share["pending"].setdefault(c, pt)
+                if down:
+                    try:
+                        res = _http("GET")
+                        q.put(("community", res.get("prices", {}) if isinstance(res, dict) else {}))
+                    except Exception:
+                        pass
+            finally:
+                share["busy"] = False
+        threading.Thread(target=work, daemon=True).start()
+
+    SHARE_DOES = ["Sends the Exchange prices this app reads from your game log (item, price, time) to the "
+                  "TLI Blessing Helper price server.",
+                  "Downloads prices other players shared, for items you haven't searched yourself. "
+                  "They are marked with “≈”.",
+                  "Also fills in missing prices in the DS Calculator."]
+    SHARE_DOESNT = ["Sends no account, name, IP address or game data other than prices. A random install "
+                    "number is sent so the same player isn't counted twice.",
+                    "Never replaces your own searches: they always come first.",
+                    "Uses a shared price only when at least 3 players sent it, or when the app's developer "
+                    "checked it in game; extreme values are ignored.",
+                    "Sends nothing while it is off. You can turn it off any time."]
+
+    def confirm_share():
+        """"Share prices" açılırken: ne yapıp ne yapmadığını anlatan onay penceresi (uygulamanın dilinde).
+        -> True: kullanıcı açtı."""
+        win = tk.Toplevel(root, bg=BG)
+        win.title(tr("Share prices"))
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.transient(root)
+        try:
+            if st.get("win_icon"):
+                win.iconphoto(False, st["win_icon"])
+        except Exception:
+            pass
+        ans = {"ok": False}
+        pad = dict(padx=20)
+        T(tk.Label(win, bg=BG, fg=FG, font=(F_UI, 14, "bold"), anchor="w"), "Share prices").pack(
+            fill="x", pady=(18, 2), **pad)
+        T(tk.Label(win, bg=BG, fg=MUTED, font=(F_UI, 9), anchor="w", justify="left", wraplength=440),
+          "Players help each other fill in Exchange prices.").pack(fill="x", **pad)
+        for title, rows, col, mark in (("What it does", SHARE_DOES, PRI, "✓"),
+                                       ("What it doesn't do", SHARE_DOESNT, GOOD, "✕")):
+            T(tk.Label(win, bg=BG, fg=col, font=(F_UI, 10, "bold"), anchor="w"), title).pack(fill="x", pady=(14, 4), **pad)
+            for r in rows:
+                row = tk.Frame(win, bg=BG)
+                row.pack(fill="x", pady=2, **pad)
+                tk.Label(row, text=mark, bg=BG, fg=col, font=(F_UI, 9, "bold"), width=2, anchor="nw").pack(side="left", anchor="n")
+                T(tk.Label(row, bg=BG, fg=FG, font=(F_UI, 9), anchor="w", justify="left", wraplength=410), r).pack(
+                    side="left", fill="x")
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(fill="x", pady=(18, 18), **pad)
+
+        def done(ok):
+            ans["ok"] = ok
+            win.grab_release()
+            win.destroy()
+        T(ttk.Button(btns, style="Primary.TButton", command=lambda: done(True)), "Turn on").pack(side="right")
+        T(ttk.Button(btns, command=lambda: done(False)), "Cancel").pack(side="right", padx=8)
+        win.protocol("WM_DELETE_WINDOW", lambda: done(False))
+        win.bind("<Escape>", lambda e: done(False))
+        win.update_idletasks()
+        x = root.winfo_rootx() + (root.winfo_width() - win.winfo_width()) // 2
+        y = root.winfo_rooty() + (root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        win.grab_set()
+        win.focus_force()
+        root.wait_window(win)
+        return ans["ok"]
+
+    def toggle_community():
+        if var_comm.get() and not confirm_share():
+            var_comm.set(False)
+            return
+        data["settings"]["community_prices"] = bool(var_comm.get())
+        save_data(data)
+        share["last_down"] = 0.0                  # açılınca hemen indir
+        load_community_cache()
+        st["inv_dirty"] = True
+        st["dirty"] = True
+        render_inv()
+
+    def render_inv():
+        """Envanterin seçili sekmesi: eşyalar toplam FE değerine göre (fiyatı bilinmeyenler en altta)."""
+        inv = st.get("inv")
+        st["inv_dirty"] = False
+        pages = inv["pages"] if inv else {}
+        price = lambda c: eng.ref_price(c)
+        totals = {p: sum(n * price(c) for c, n in items.items() if price(c)) for p, items in pages.items()}
+        for page, (cell, lb, line_) in inv_tabs.items():
+            on = page == inv_state["page"]
+            cell.config(bg=TAB_ON if on else TAB_OFF, highlightbackground=TAB_EDGE_ON if on else BORDER)
+            lb.config(bg=TAB_ON if on else TAB_OFF, fg="#FFFFFF" if on else MUTED,
+                      text=tr(INV_PAGES[page]) + (f"  ·  {totals[page]:,.0f} FE" if totals.get(page) else ""))
+            line_.config(bg=PRI if on else TAB_OFF)
+        tvinv.delete(*tvinv.get_children())
+        if not inv:
+            lbl_inv_total.config(text="—")
+            lbl_inv_sub.config(text=tr("Log in to a character or press “Sort Order” in your inventory."))
+            lbl_inv_hint.config(text="")
+            return
+        lbl_inv_total.config(text=tr(f"{sum(totals.values()):,.0f} FE"))
+        lbl_inv_sub.config(text=tr(f"Inventory value at your Exchange prices (before tax)\n"
+                                   f"Updated {datetime.fromtimestamp(inv['ts']).strftime('%H:%M')} · "
+                                   f"press “Sort Order” in game to refresh"))
+        items = pages.get(inv_state["page"], {})
+        rows = sorted(items.items(), key=lambda cn: (price(cn[0]) is None, -(cn[1] * (price(cn[0]) or 0)), -cn[1]))
+        n_np = 0
+        for i, (cid, n) in enumerate(rows):
+            p = price(cid)
+            no_trade = p is None and str(cid) in NOT_TRADEABLE
+            if p is None and not no_trade:
+                n_np += 1
+            comm = p and str(cid) not in eng.data["prices"] and cid != FE      # topluluk fiyatı: "≈"
+            tvinv.insert("", "end", iid=str(cid), text="  " + tr(item_name(cid)), image=inv_icon(cid),
+                         values=(f"{n:,}", ("≈ " if comm else "") + fmt(p, 4) if p else
+                                 (tr("not tradeable") if no_trade else "—"),
+                                 f"{n * p:,.1f}" if p else "—"),
+                         tags=zebra("np" if p is None else ("top" if i < 3 else ""), i))
+        hint = "Sorted by total value. "
+        if any(str(c) not in ITEM_NAMES for c in items):
+            hint += "Unnamed items are new this season: right-click one to name it. "
+        if n_np:
+            hint += (f"{n_np} item(s) have no price yet: search them once on the Exchange and they are added. ")
+        if community_on():
+            hint += "≈ = community price (shared by other players; your own searches always come first)."
+        else:
+            hint += "Turn on “Share prices” to fill in missing prices from other players."
+        lbl_inv_hint.config(text=tr(hint), fg=ACC if n_np else MUTED)
+
     def render_runs():
         runs = vs_log.runs
         cur = runs[-1] if runs else None
-        sig = (len(runs), cur and (cur["red"], cur["memories"], cur.get("tracked"), vs_log.active))
+        sig = (len(runs), cur and (cur["red"], cur["memories"], cur.get("tracked"), vs_log.active,
+                                   sum(cur.get("picks", {}).values())),
+               fe_mode() and tuple(round(v or 0, 4) for v in fe_prices().values()))   # FE değerleri fiyatla değişir
         if st.get("runs_sig") == sig:          # değişmediyse yeniden çizme (seçim kaybolmasın)
             return
         st["runs_sig"] = sig
+        if fe_mode():
+            render_fe_runs()
+            return
+        ids = red_run_ids()
+        cur = runs[ids[-1]] if ids else None
         n_runs, n_red, avg, n_mem, avg_mem = vs_log.stats()
         vs_kpis["runs"][0].config(text=tr(f"{n_runs}"))
         vs_kpis["runs"][1].config(text=tr("tracked by the app"))
@@ -2503,23 +3686,24 @@ def run_gui(start_hidden=False):
         vs_kpis["mem"][1].config(text=tr(f"{avg_mem:.1f} per run"))
         vs_kpis["red"][0].config(text=tr(f"{n_red}"))
         vs_kpis["red"][1].config(text=tr(f"{avg:.2f} per run"))
+        retext(vs_kpis["last"][2], "Last run")
         vs_kpis["last"][0].config(text=tr(f"{cur['memories']} mem" if cur else "—"))
         vs_kpis["last"][1].config(text=(tr(f"{cur['red']} red · {cur['t'][5:]}" if cur else "no runs yet")))
         tvr.delete(*tvr.get_children())
         run_rows.clear()
-        for row_i, i in enumerate(range(len(runs) - 1, -1, -1)):
+        for row_i, i in enumerate(reversed(ids)):
             r = runs[i]
             live = i == len(runs) - 1 and vs_log.active
             tag = "live" if live else ("gotred" if r["red"] else "plain")
-            iid = tvr.insert("", "end", values=trv((r["t"][5:] + ("  · now" if live else ""),
+            iid = tvr.insert("", "end", values=trv(("In progress" if live else r["t"][5:],
                                                 _whisper_short(VS.run_whispers(r["effects"])),
                                                 r["memories"], r["red"])), tags=zebra(tag, row_i))
             run_rows[iid] = i
-        if not runs:
+        if not ids:
             run_detail.config(highlightbackground=BORDER)
             detail_card("No runs yet", "", MUTED,
                         note="Enter the Void Sea Terminal in game; each run is added here automatically.")
-        elif st.get("sel_run") is not None and st["sel_run"] < len(runs):
+        elif st.get("sel_run") in ids:
             select_run(st["sel_run"], switch=False)   # yeniden çizimden sonra aynı koşu seçili kalsın
         else:
             run_detail.config(highlightbackground=BORDER)
@@ -2527,6 +3711,78 @@ def run_gui(start_hidden=False):
                         note="Red memories are counted with the +1 / −1 buttons on the overlay's Void Sea tab.")
         draw_chart()
         render_cmp()
+
+    def fe_run_ids():
+        """FE planı sayfasındaki koşular (kayıttaki sıra numaraları): o planla yapılan, Scrap / Thread sayılanlar."""
+        return [i for i, r in enumerate(vs_log.runs) if "picks" in r and VS.is_fe_run(r)]
+
+    def red_run_ids():
+        """Red memories sayfasındaki koşular: Memory materials planının koşuları hariç."""
+        return [i for i, r in enumerate(vs_log.runs) if not VS.is_fe_run(r)]
+
+    def fe_live(i):
+        return i == len(vs_log.runs) - 1 and vs_log.active
+
+    def render_fe_runs():
+        """FE planı (Memory materials): aynı sayfa; kartlar, grafik ve tablo toplanan Scrap / Thread'in FE değeriyle."""
+        runs = vs_log.runs
+        prices = fe_prices()
+        s = fe_s()
+        ids = fe_run_ids()
+        done = [i for i in ids if runs[i].get("tracked", True) and not fe_live(i)]
+        vals = [VS.run_fe(runs[i], prices) for i in done]
+        live_i = ids[-1] if ids and fe_live(ids[-1]) else None
+        vs_kpis["runs"][0].config(text=tr(f"{len(done)}"))
+        vs_kpis["runs"][1].config(text=tr("finished · 1 in progress" if live_i is not None else ("finished run" if len(done) == 1 else "finished runs")))
+        vs_kpis["mem"][0].config(text=tr(f"{sum(vals):,.1f} FE" if vals else "—"))
+        vs_kpis["mem"][1].config(text=tr("after tax, all finished runs"))
+        vs_kpis["red"][0].config(text=tr(f"{sum(vals) / len(vals):.1f} FE" if vals else "—"))
+        vs_kpis["red"][1].config(text=tr("after tax" if vals else "after your first finished run"))
+        last = live_i if live_i is not None else (done[-1] if done else None)
+        if last is None:
+            retext(vs_kpis["last"][2], "Last run")
+            vs_kpis["last"][0].config(text="—")
+            vs_kpis["last"][1].config(text=tr("no run with this plan yet"))
+        else:
+            r = runs[last]
+            retext(vs_kpis["last"][2], "This run · in progress" if live_i is not None else "Last run")
+            vs_kpis["last"][0].config(text=tr(f"{VS.run_fe(r, prices):.1f} FE"))
+            vs_kpis["last"][1].config(text=tr(f"{r['picks'].get(VS.SCRAP_ID, 0)} Scrap · "
+                                              f"{sum(r['picks'].get(c, 0) for c in VS.THREAD_IDS)} Thread"
+                                              + ("" if live_i is not None else f" · {r['t'][5:]}")))
+        tvr.delete(*tvr.get_children())
+        run_rows.clear()
+        for row_i, i in enumerate(reversed(ids)):
+            r = runs[i]
+            p = r["picks"]
+            live = fe_live(i)
+            iid = tvr.insert("", "end", values=trv(("In progress" if live else r["t"][5:],
+                                                _whisper_short(VS.run_whispers(r["effects"])),
+                                                f"{p.get(VS.SCRAP_ID, 0)} / {sum(p.get(c, 0) for c in VS.THREAD_IDS)}",
+                                                f"{VS.run_fe(r, prices):.1f}")),
+                             tags=zebra("live" if live else "plain", row_i))
+            run_rows[iid] = i
+        src = ("last run" if s["n_base"] == 1 else f"last {s['n_base']} runs") if s["n_base"] else "default"
+        sub = (f"Newest first. Click a run to see its whispers. Price after tax: Scrap {s['unit']['scrap']:.3f} FE, "
+               f"Thread {s['unit']['thread']:.3f} FE · base per run {s['base']['scrap']:.0f} Scrap / "
+               f"{s['base']['thread']:.1f} Thread ({src}).")
+        if s["missing"]:
+            sub += " No price yet for " + ", ".join(s["missing"]) + ": search it on the Exchange once."
+        low_views["runs"] = (fr_runs, "Run history", sub)
+        if low_state["key"] == "runs":
+            lbl_low_sub.config(text=tr(sub), fg=ACC if s["missing"] else MUTED)
+        if not ids:
+            run_detail.config(highlightbackground=BORDER)
+            detail_card("No runs yet", "", MUTED,
+                        note="Pick the Memory materials plan and run the Void Sea; each run is added here "
+                             "automatically with the Scrap and Threads you pick up.")
+        elif st.get("sel_run") in ids:
+            select_run(st["sel_run"], switch=False)
+        else:
+            run_detail.config(highlightbackground=BORDER)
+            detail_card("No run selected", "Click a run in the table or a bar in the chart.", MUTED,
+                        note="A run counts toward the averages when you leave the Void Sea map.")
+        draw_chart()
 
     def show_run(_e=None):
         sel = tvr.selection()
@@ -2540,7 +3796,7 @@ def run_gui(start_hidden=False):
             return
         j = int((e.x - g["left"]) // g["slot"])
         if 0 <= j < g["n"]:
-            select_run(g["first"] + j)
+            select_run(g["ids"][j])
 
     tvr.bind("<<TreeviewSelect>>", show_run)
     chart.bind("<Button-1>", chart_click)
@@ -2686,6 +3942,30 @@ def run_gui(start_hidden=False):
             if cmd:
                 lb.bind("<Button-1>", lambda e: cmd())
 
+        _vs_plan_chip(wrap)
+        if not data["settings"].get("vs_expanded", False):
+            # kısa görünüm: sadece ne seçilecek, okundu mu, kaç whisper seçildi
+            text, col = _vs_decision(pos)
+            line(text, col, 12, True)
+            m = vs_st["msg"]
+            if vs_st["scanning"] or m.startswith("Reading"):
+                state, scol = "Reading…", MUTED
+            elif m.startswith("⚠"):
+                state, scol = m, BAD
+            elif vs.cards or vs.mode in ("flame", "overview"):
+                state, scol = "✓ Read", GOOD
+            else:
+                state, scol = "Not read yet", MUTED
+            line(f"{state}  ·  {vs.count()}/6 whispers picked", scol, 9)
+            if vs.mode in ("cards", "flame") and (vs.cards or vs.mode == "flame") and not vs.owned_seen:
+                line("⚠ Open the “Seal Whispers Owned” panel and press Read.", ACC, 8)
+            _vs_finish(line, compact=True)
+            return
+        if fe_plan():
+            _vs_fe_body(line, pos, n)
+            _vs_finish(line)
+            return
+
         # Kırmızı (Ultimate) memory sayacı en üstte: log kaliteyi göstermediği için elle girilir
         cur = vs_log.current()
         n_runs, n_red, avg, n_mem, avg_mem = vs_log.stats()
@@ -2720,12 +4000,7 @@ def run_gui(start_hidden=False):
             for i, (alt, x_) in enumerate(mdl.get("alts", []), 2):
                 line(f"Option {i}: {VS.describe_combo(alt)}", MUTED, 8)
 
-        # öneri sahip olunan fısıltılara göre: sağdaki panel bu okumada görülmediyse açıkça söyle
-        if vs.mode in ("cards", "flame") and (vs.cards or vs.mode == "flame") and not vs.owned_seen:
-            base = (f"is based on the last {len(vs.picked)} whispers read" if vs.picked
-                    else "assumes you own no whispers")
-            line(f"⚠ The “Seal Whispers Owned” panel on the right was not read (is it closed?). The advice {base}. "
-                 "Open the panel and press “Read”.", ACC, 8)
+        _vs_owned_warning(line)
 
         if len(vs.picked) >= 6:
             line("Terminal is full (6/6).", MUTED, 10)
@@ -2769,8 +4044,138 @@ def run_gui(start_hidden=False):
         why = vs.reason(data["settings"], [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(vs.cards)])
         if why:
             line(why, VS_WHY, 9)
+        _vs_finish(line)
+
+    def _vs_owned_warning(line):
+        # öneri sahip olunan fısıltılara göre: sağdaki panel bu okumada görülmediyse açıkça söyle
+        if vs.mode in ("cards", "flame") and (vs.cards or vs.mode == "flame") and not vs.owned_seen:
+            base = (f"is based on the last {len(vs.picked)} whispers read" if vs.picked
+                    else "assumes you own no whispers")
+            line(f"⚠ The “Seal Whispers Owned” panel on the right was not read (is it closed?). The advice {base}. "
+                 "Open the panel and press “Read”.", ACC, 8)
+
+    def _vs_fe_body(line, pos, n):
+        """FE planı (Wealth + Wonder): toplanan Memory Scrap / Thread'in FE değerini en çok artıran seçim."""
+        s = fe_s()
+        prices = fe_prices()
+        cur = vs_log.current()
+        if cur is not None and "picks" in cur:
+            p = cur["picks"]
+            th = " ".join(f"{p[c]}{VS.THREAD_SHORT[c]}" for c in VS.THREAD_IDS if p.get(c)) or "0"
+            line(f"Last run: {p.get(VS.SCRAP_ID, 0)} Scrap · {th} Thread · {VS.run_fe(cur, prices):.1f} FE  · automatic",
+                 FG, 9, True)
+        frs = VS.fe_runs(vs_log.runs)
+        if frs:
+            avg = sum(VS.run_fe(r, prices) for r in frs) / len(frs)
+            line(f"Log: {len(frs)} runs · {avg:.1f} FE per run (after tax)", MUTED, 8)
+        src = (("from your last run" if s["n_base"] == 1 else f"from your last {s['n_base']} runs") if s["n_base"]
+               else "default — learns from your runs")
+        line(f"Base per run: {s['base']['scrap']:.0f} Scrap, {s['base']['thread']:.1f} Thread ({src})", MUTED, 8)
+        mix = " / ".join(f"{VS.THREAD_SHORT[c]} {r * 100:.0f}%" for c, r in s["mix"].items())
+        line(f"Price after tax: Scrap {s['unit']['scrap']:.3f} FE · Thread {s['unit']['thread']:.3f} FE ({mix})",
+             MUTED, 8)
+        if s["missing"]:
+            line("⚠ No price for " + ", ".join(s["missing"]) + ": search it on the Exchange once.", ACC, 8)
+        _vs_owned_warning(line)
+
+        if len(vs.picked) >= 6:
+            line("Terminal is full (6/6).", MUTED, 10)
+        elif vs.mode == "overview":
+            line(f"{vs.need} more whisper(s) needed for the Terminal", FG, 11, True)
+            line("Advice appears here when the selection screen opens.", MUTED, 8)
+        elif vs.mode == "flame":
+            fbest, out = vs.fe_flame(s)
+            if fbest in out:
+                line(f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", VS_COL[fbest], 12, True)
+            elif fbest == "tie":
+                line("Flames are almost equal", FG, 12, True)
+            else:
+                line("No effect on FE", MUTED, 11, True)
+            for side in sorted(out, key=lambda x: -out[x][0]):
+                line(f"{VS.flame_label(side, vs.tiers)} flame: average {out[side][0]:+.1f} FE ({out[side][1]:+.0f}%)",
+                     GOOD if side == fbest else FG, 9)
+            if vs.selected in out:
+                ok = fbest not in out or vs.selected == fbest
+                line(f"Currently selected: {VS.SIDE_LABEL[vs.selected]}" + ("" if ok else "  → change it"),
+                     MUTED if ok else BAD, 9, ok is False)
+            elif vs.selected == "arm":
+                line("The Armament flame is selected: the FE plan uses Wealth + Wonder.", ACC, 9)
+        elif not vs.cards:
+            line("Not read yet.", MUTED, 10)
+        else:
+            best, gains = vs.fe_advice(s)
+            if isinstance(best, int):
+                side = vs.cards[best][0]
+                line(f"▶ {pos[best].capitalize()} · {VS.SIDE_LABEL[side]}", VS_COL[side], 12, True)
+            elif best == "tie":
+                line("Almost equal", FG, 12, True)
+            else:
+                line("No effect on FE", MUTED, 11, True)
+            for i in sorted(range(n), key=lambda i: -gains[i][0]):
+                side, effs, _x = vs.cards[i]
+                good = gains[i][0] > 0
+                line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}   {gains[i][0]:+.1f} FE",
+                     GOOD if i == best else (FG if good else MUTED), 9, cmd=lambda i=i: vs_take(i))
+            line("(if your pick is not added automatically, click it)", MUTED, 7)
+        if vs.picked:
+            line("Advice based on these picks: " + "; ".join(VS.describe(e, fe=True) for _, e in vs.picked), VS_PICKED, 9)
+        why = vs.fe_reason(s, [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(vs.cards)])
+        if why:
+            line(why, VS_WHY, 9)
+
+    VS_PLAN_NAME = {"red": "Red memories", "fe": "Memory materials"}
+
+    def _vs_plan_chip(wrap):
+        """Panelin üstünde plan adı; tıklayınca iki plan arasında seçim (koyu menü)."""
+        row = tk.Frame(vs_body, bg=OBG)
+        row.pack(fill="x", pady=(0, 3))
+        key = "fe" if fe_plan() else "red"
+        chip = tk.Label(row, text=tr(f"◎ {VS_PLAN_NAME[key]}  ▾"), bg="#14243A", fg=PRI, font=("Segoe UI", 9, "bold"),
+                        padx=8, pady=2, cursor="hand2")
+        chip.pack(side="left")
+
+        def choose(_e=None):
+            items = []
+            for k, sub in (("red", "Armament + Wonder"), ("fe", "Wealth + Wonder")):
+                items.append(("item", f"{VS_PLAN_NAME[k]} · {sub}", "\uE73E" if k == key else " ",
+                              lambda k=k: show_plan(k)))
+            dark_menu(items, chip.winfo_rootx(), chip.winfo_rooty() + chip.winfo_height() + 2, width=270, focus=False)
+        chip.bind("<Button-1>", choose)
+
+    def _vs_decision(pos):
+        """Kısa görünümün ana satırı: (yazı, renk)."""
+        fe = fe_plan()
+        s = fe_s() if fe else None
+        if len(vs.picked) >= 6:
+            return "Terminal is full (6/6)", MUTED
+        if vs.mode == "overview":
+            return f"{vs.need} more whisper(s) needed", FG
+        if vs.mode == "flame":
+            fbest, out = vs.fe_flame(s) if fe else vs.flame(data["settings"])
+            if fbest in out:
+                return f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", VS_COL[fbest]
+            return ("Flames are almost equal", FG) if fbest == "tie" else ("No flame helps", MUTED)
+        if not vs.cards:
+            return "Open the Void Sea Terminal", MUTED
+        best, _gains = vs.fe_advice(s) if fe else vs.advice(data["settings"])
+        if isinstance(best, int):
+            side = vs.cards[best][0]
+            return f"▶ {pos[best].capitalize()} · {VS.SIDE_LABEL[side]}", VS_COL[side]
+        return ("Almost equal: either card", FG) if best == "tie" else ("No card helps", MUTED)
+
+    def _vs_toggle_expand():
+        data["settings"]["vs_expanded"] = not data["settings"].get("vs_expanded", False)
+        save_data(data)
+        render_vs()
+
+    def _vs_finish(line, compact=False):
         m = vs_st["msg"]
-        line(m, BAD if m.startswith("⚠") else MUTED, 8)
+        if not compact:
+            line(m, BAD if m.startswith("⚠") else MUTED, 8)
+        lk = tk.Label(vs_body, text=tr("Expand  ▾" if compact else "Show less  ▴"), bg=OBG, fg=PRI,
+                      font=("Segoe UI", 8, "bold"), anchor="w", cursor="hand2")
+        lk.pack(fill="x", pady=(4, 0))
+        lk.bind("<Button-1>", lambda e: _vs_toggle_expand())
         render_runs()
         _vs_bind_wheel(vs_body)
         vs_canvas.yview_moveto(0)
@@ -2864,6 +4269,10 @@ def run_gui(start_hidden=False):
                             os.startfile(USER_DIR)
                         except Exception:
                             pass
+                    elif v == "menu":
+                        show_tray_menu()
+                    elif v == "bug":
+                        open_bug_report()
                 elif k == "update_manual":
                     tray = tray_obj["t"]
                     if v is None:
@@ -2897,6 +4306,34 @@ def run_gui(start_hidden=False):
                 elif k == "vs":
                     on_vs(*v)
                     continue
+                elif k == "inv":
+                    st["inv"] = v
+                    st["inv_dirty"] = True
+                    continue
+                elif k == "icon":
+                    st["inv_dirty"] = True
+                    continue
+                elif k == "items":               # güncel eşya listesi indi: yeni adlar ve simge adresleri
+                    known = set(ITEM_NAMES) | set(ITEM_IMGS)
+                    apply_item_extras()
+                    for c in (set(ITEM_NAMES) | set(ITEM_IMGS)) - known:
+                        forget_icon_miss(c)
+                    st["inv_dirty"] = True
+                    continue
+                elif k == "tab_icon":            # Inventory value sekmesinin FE simgesi indi
+                    try:
+                        from PIL import Image
+                        set_tab_icon(v, Image.open(TAB_FE_PATH))
+                    except Exception:
+                        pass
+                    continue
+                elif k == "pick":
+                    # sadece canlı olaylar (ilk log taramasındaki eski toplamalar değil); koşu açık değilse sayılmaz
+                    if abs(time.time() - v["ts"]) < 60 and vs_log.active:
+                        vs_log.on_pick(v["cid"], v["n"])
+                        if fe_plan():
+                            render_vs()
+                    continue
                 elif k == "shop":
                     # sadece canlı olaylar (ilk log taramasındaki eski olaylar değil)
                     if abs(time.time() - v["ts"]) < 20:
@@ -2913,6 +4350,21 @@ def run_gui(start_hidden=False):
                 else:
                     if k == "buy":
                         match_buy_to_offer(v)
+                    elif k == "price":
+                        st["inv_dirty"] = True       # Inventory value sekmesi yeni fiyatla yeniden çizilsin
+                        queue_share(v)
+                    elif k == "community":           # indirilen ortak fiyatlar
+                        v = clean_community(v)
+                        if community_on() and v:
+                            eng.community = v
+                            st["inv_dirty"] = True
+                            try:
+                                with open(COMMUNITY_FILE, "w", encoding="utf-8") as f:
+                                    json.dump({"ts": time.time(), "prices": v}, f)
+                            except OSError:
+                                pass
+                        st["dirty"] = True
+                        continue
                     eng.on_event(k, v)
                 st["dirty"] = True
         except queue.Empty:
@@ -2927,6 +4379,10 @@ def run_gui(start_hidden=False):
             show_path()
         update_loghelp(kind)
         update_dot()
+        # envanter sekmesi açıksa: değişen envanter / yeni simgeler en fazla 1.5 sn'de bir çizilir
+        if st.get("inv_dirty") and st.get("main_tab") == "inv" and time.time() - st.get("inv_drawn", 0) > 1.5:
+            st["inv_drawn"] = time.time()
+            render_inv()
         if time.time() - st.get("stale_chk", 0) > 60:     # fiyatın eskiyip eskimediği zamanla değişir
             st["stale_chk"] = time.time()
             st["dirty"] = True
@@ -2976,6 +4432,7 @@ def run_gui(start_hidden=False):
                 from PIL import ImageTk
                 st["win_icon"] = ImageTk.PhotoImage(icon_img.resize((32, 32)), master=root)
                 root.iconphoto(True, st["win_icon"])
+                st["menu_icon"] = ImageTk.PhotoImage(icon_img.resize((16, 16)), master=root)   # tepsi menüsünün başlığı
             except Exception:
                 pass
             tray_obj["t"] = TR.Tray(icon_img, lambda a: q.put(("tray", a)), APP_VERSION)
