@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.7"
+APP_VERSION = "6.7.1"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -651,6 +651,7 @@ RX_BAG = re.compile(r"BagMgr@:(?:InitBagData|Modfy BagItem) PageId = (-?\d+) Slo
 RX_XSEND = re.compile(r"SendMessage STT----XchgSearchPrice----SynId = (\d+)")
 RX_XRECV = re.compile(r"RecvMessage STT----XchgSearchPrice----SynId = (\d+)")
 RX_REFER = re.compile(r"\+refer \[([^\]]*)\]")
+RX_KEY = re.compile(r"\+key \[(\d+)\]")
 RX_PRICE = re.compile(r"\+\d+ \[([0-9.eE+-]+)\]\s*$")
 RX_CUR = re.compile(r"\+currency \[(\d+)\]")
 RX_FUNC = re.compile(r"CheckFuncDownloaded FuncId = (\d+)")
@@ -853,11 +854,18 @@ class Parser:
         if kind == "send":
             text = "\n".join(lines)
             refers = RX_REFER.findall(text)
-            # Sadece basit eşya aramaları (affix/filtre olmadan)
+            keys = RX_KEY.findall(text)
+            # Basit eşya araması (filtresiz)
             if len(refers) == 1 and "params" not in text and refers[0].isdigit():
-                self.pending_search[syn] = refers[0]
+                self.pending_search[syn] = (refers[0], False)
+            # Skill sayfasındaki eşyalar (Price Check): eşya (key 4) + oyunun koyduğu seviye (key 1) / affix (key 5)
+            # filtresi. Fiyat o seviyedeki / o affixli eşyanın fiyatı: oyuncunun kendi eşyası için doğru ama
+            # başkalarınınki için değil, topluluğa gönderilmez ("filtered").
+            elif (keys and keys[0] == "4" and refers and refers[0].isdigit()
+                  and all(k in ("1", "5") for k in keys[1:])):
+                self.pending_search[syn] = (refers[0], True)
             return
-        cid = self.pending_search.pop(syn, None)
+        cid, filtered = self.pending_search.pop(syn, (None, False))
         if not cid:
             return
         # İki biçim: eskisinde önce fiyatlar sonra "+currency [100300]"; Tartarus sezonunda (2026-11-02) önce
@@ -882,7 +890,8 @@ class Parser:
                     except ValueError:
                         pass
         if prices and cur == FE:
-            self.emit("price", {"cid": cid, "prices": sorted(prices), "ts": self.last_ts or time.time()})
+            self.emit("price", {"cid": cid, "prices": sorted(prices), "ts": self.last_ts or time.time(),
+                                "filtered": filtered})
 
 
 # --------------------------------------------------------------------------- #
@@ -3630,7 +3639,7 @@ def run_gui(start_hidden=False):
 
     def queue_share(v):
         """Log'dan yeni öğrenilen fiyat (son 24 saatte görülmüş): bir sonraki gönderimde yollanır."""
-        if community_on() and v.get("prices") and abs(time.time() - v["ts"]) < 86400:
+        if community_on() and v.get("prices") and not v.get("filtered") and abs(time.time() - v["ts"]) < 86400:
             lst = v["prices"][:3]
             share["pending"][str(v["cid"])] = (sum(lst) / len(lst), int(v["ts"]))
 
