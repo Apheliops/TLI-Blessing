@@ -438,11 +438,12 @@ def _name_cn(im, cx, s):
 
 
 CARD_TOP = 110        # kartın üst kenarı (1440p, yerinde dururken)
+CARD_ROW_DY = 251     # ikinci kart satırının kayması (büyük arayüz ölçeğinde 8. kart alta iner; ×1.44'te ölçüldü)
 
 
-def _card_top(im, cx, s, np):
+def _card_top(im, cx, s, np, default=CARD_TOP):
     """Kartın üst kenarının y'si: koyu arka plandan kartın renkli zeminine geçilen ilk satır
-    (parlaklık 0.15 civarından 0.45 üstüne çıkar). Bulunamazsa yerinde dururkenki değer."""
+    (parlaklık 0.15 civarından 0.45 üstüne çıkar). Bulunamazsa default × ölçek (default=None: None)."""
     y0, y1 = int(60 * s), int(450 * s)
     strip = np.asarray(im.crop((int(cx - 30 * s), y0, int(cx + 30 * s), y1)).convert("RGB")).astype(float)
     val = strip.max(2).mean(1) / 255
@@ -450,14 +451,16 @@ def _card_top(im, cx, s, np):
     for y in range(len(val) - run):
         if (val[y:y + run] > 0.35).all():
             return y0 + y
-    return CARD_TOP * s
+    return None if default is None else default * s
 
 
 def _locate_cards(im, s, np):
     """Kartları ekranda bul: kartların renkli zemini koyu arka plandan belirgin parlak.
     21:9 gibi geniş ekranlarda ve farklı arayüz ölçeklerinde kartlar varsayılan yerde durmuyor
     (geniş ekranda arayüz ortalanmıyor, sola dayalı; ölçek oyuncunun ayarına göre değişebiliyor).
-    -> (8 kartın merkezleri, etkin ölçek) | None"""
+    Büyük arayüz ölçeğinde (ör. 2560×1440 pencerede ×1.44, GitHub #4) 8 kart tek satıra sığmıyor: sağa
+    sığmayanlar alt satırın başından devam ediyor.
+    -> ([(kartın merkez x'i, satırın dikey kayması)] × 8, etkin ölçek) | None"""
     W, H = im.size
     y0, y1 = int(140 * s), int(200 * s)
     col = np.asarray(im.crop((0, y0, W, y1)).convert("RGB")).astype(float).max(2).mean(0) / 255
@@ -472,13 +475,17 @@ def _locate_cards(im, s, np):
             x = e
         else:
             x += 1
-    cands = [(a + b) / 2 for a, b in runs if 80 * s <= b - a <= 170 * s]    # sarı sekme gibi geniş alanlar elenir
-    gaps = [b - a for a, b in zip(cands, cands[1:]) if 150 * s <= b - a <= 230 * s]
+    # kartların hepsi aynı genişlikte (varsayılan ölçekte ~145 px, büyük ölçekte daha geniş): en çok tekrar eden
+    # genişliktekiler kart sayılır; sarı sekme gibi tek kalan parlak alanlar elenir
+    widths = [(b - a, (a + b) / 2) for a, b in runs if 80 * s <= b - a <= 300 * s]
+    ref = max((w for w, _ in widths), key=lambda w: sum(1 for v, _ in widths if abs(v - w) <= 0.06 * w), default=0)
+    cands = [c for w, c in widths if abs(w - ref) <= 0.06 * ref]
+    gaps = [b - a for a, b in zip(cands, cands[1:]) if 150 * s <= b - a <= 300 * s]
     if len(cands) < 4 or not gaps:
         return None
     spacing = float(np.median(gaps))
     k = spacing / (CARD_DX * s)                 # oyunun arayüz ölçeği / varsayılan
-    if not 0.85 <= k <= 1.25:
+    if not 0.85 <= k <= 1.6:
         return None
     # en soldaki bulunan kart hangi sırada? (satılmış kartlar sönük olup bulunamayabilir)
     n0 = max(0, round((cands[0] - CARD_X0 * s * k) / spacing))
@@ -486,7 +493,28 @@ def _locate_cards(im, s, np):
     fits = sum(1 for c in cands if abs(((c - c0) / spacing) - round((c - c0) / spacing)) < 0.15)
     if fits < 4:
         return None
-    return [c0 + i * spacing for i in range(N_CARDS)], s * k
+    # satıra sığan kart sayısı: kartın yarısı ekranın içinde kalmalı; sığmayanlar alt satırda
+    half = 0.37 * spacing
+    per_row = max(1, min(N_CARDS, int((W - half - c0) // spacing) + 1))
+    row2 = _second_row_shift(im, c0, s * k, np) if per_row < N_CARDS else 0
+    return [(c0 + i * spacing, 0) if i < per_row else (c0 + (i - per_row) * spacing, row2)
+            for i in range(N_CARDS)], s * k
+
+
+def _second_row_shift(im, cx, s, np):
+    """Alt satırdaki kartların, üst satıra göre dikey kayması (px): ilk kartın sütununda, kartın altındaki koyu
+    boşluktan sonra yeniden parlak zemine geçilen satır. Bulunamazsa kartın varsayılan satır aralığı."""
+    top = _card_top(im, cx, s, np)
+    y0 = int(top + 150 * s)
+    strip = np.asarray(im.crop((int(cx - 30 * s), y0, int(cx + 30 * s), im.height)).convert("RGB")).astype(float)
+    val = strip.max(2).mean(1) / 255
+    run, dark = max(2, int(20 * s)), 0       # kart zemini uzun parlak bir bölge; fiyat rakamları kısa
+    for y in range(len(val) - run):
+        if val[y] < 0.30:
+            dark += 1
+        elif dark >= 10 * s and (val[y:y + run] > 0.35).all():
+            return int(y0 + y - top)
+    return int(round(CARD_ROW_DY * s))
 
 
 def read_offers(im, item_names=None):
@@ -505,17 +533,27 @@ def read_offers(im, item_names=None):
     if found:
         centers, s = found
     else:
-        centers = [(CARD_X0 + CARD_DX * i) * s for i in range(N_CARDS)]
+        centers = [((CARD_X0 + CARD_DX * i) * s, 0) for i in range(N_CARDS)]
+    full = im
+    # her satırın dikey hizası: üst kenarı bulunan kartların ortancası (satılmış kart sönük, kenarı bulunamıyor)
+    row_tops = {}
+    for cx, row_dy in centers:
+        t = _card_top(full.crop((0, row_dy, W, H)) if row_dy else full, cx, s, np, default=None)
+        if t is not None and abs(t - CARD_TOP * s) <= 80 * s:
+            row_tops.setdefault(row_dy, []).append(t)
+    row_top = {k: float(np.median(v)) for k, v in row_tops.items()}
     out = []
     cn = bool(zh_ocr_tag())          # Windows'ta Çince OCR kurulu mu
     n_cn = 0                         # bu okumada Çince tanınan kart sayısı
     for i in range(N_CARDS):
-        cx = centers[i]
+        cx, row_dy = centers[i]
+        # alt satırdaki kart: görüntü o satır üstte olacak şekilde kaydırılır, gerisi aynı
+        im = full.crop((0, row_dy, W, H)) if row_dy else full
         # dikey hizalama: kartın bulunan üst kenarına göre (yenileme animasyonu, farklı arayüz ölçeği)
-        top = _card_top(im, cx, s, np)
+        top = _card_top(im, cx, s, np, default=None)
+        if top is None or abs(top - CARD_TOP * s) > 80 * s:
+            top = row_top.get(row_dy, CARD_TOP * s)
         dy = int(round(top - CARD_TOP * s))
-        if abs(dy) > 80 * s:
-            dy, top = 0, CARD_TOP * s
         cim = im.crop((0, dy, W, int(460 * s) + dy)) if dy else im     # bu kart için kaydırılmış görünüm
         sold = _sold_out(cim, cx, s, np) or (dy != 0 and _sold_out(im, cx, s, np))   # satılmış kart sönük: üst kenar şaşabilir
         rec = {"slot": i + 1, "text": "", "cid": None, "qty": 1, "price": None, "sold": sold, "excluded": False,
