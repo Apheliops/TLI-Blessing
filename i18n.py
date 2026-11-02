@@ -63,6 +63,16 @@ EXACT_ZH = {
     "A run counts toward the averages when you leave the Void Sea map.": "离开虚海地图后，这一局才计入平均值。",
     "Pick the Memory materials plan and run the Void Sea; each run is added here automatically with the Scrap and "
     "Threads you pick up.": "选择追忆材料方案并进行虚海；每一局及拾取的碎絮和游丝会自动添加到这里。",
+    "Whisper pairs that work differently together than expected:": "一起选择时效果与预期不同的秘语组合：",
+    "No whisper pair works differently together than expected.": "没有秘语组合在一起时与预期不同。",
+    "FE with": "有时 FE", "FE w/o": "无时 FE", "Effect (FE / run)": "效果（每局 FE）", "Typical": "典型值",
+    "not counted": "不计入", "The advice uses what was learned from your runs.": "建议使用从你的对局中学到的结果。",
+    "FE each whisper type adds to a run, learned from your Memory materials runs. Whispers are often picked together, "
+    "so “with / without” averages can mislead; the estimated effect separates them.":
+        "每种秘语为一局增加的 FE，从你的追忆材料方案对局中学习。秘语常被一起选择，“有 / 无” 平均值可能误导；估计效果会把它们分开。",
+    "Effect = FE one typical whisper of this type adds to a run, at your prices (range: 10–90% when the runs are "
+    "resampled). Typical = the usual value of that whisper.":
+        "效果 = 该类型一个典型秘语按你的价格为一局增加的 FE（区间：对局重采样时的 10–90%）。典型值 = 该秘语的常见数值。",
     "Share results": "分享结果", "Copy and open GitHub": "复制并打开 GitHub", "Copy only": "仅复制", "Close": "关闭",
     "Your run summary (whisper types, counts and dates; nothing personal) is copied. GitHub opens in your browser: "
     "paste it with Ctrl+V into the Results box, add screenshots if you like, then press “Start discussion”. A GitHub "

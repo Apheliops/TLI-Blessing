@@ -231,8 +231,17 @@ def breakdown(effects, s):
     fit = s.get("fit")
     if fit:
         x = _features(t, s["vs_base_mem"])
-        base = s["vs_base_mem"] * math.exp(sum(fit["c"][k] * x[k] for k in FIT_KEYS if k != "flat"))
-        mem = base * math.exp(fit["c"]["flat"] * x["flat"])
+        # etkileşimler: sabit ek içermeyenler taban düşüşleri (rarity'nin etkilediği kısım), içerenler toplamı değiştirir
+        ib = ia = 0.0
+        for pair, d in (fit.get("inter") or {}).items():
+            i, j = pair.split("*")
+            if i in x and j in x:
+                if "flat" in (i, j):
+                    ia += d * x[i] * x[j]
+                else:
+                    ib += d * x[i] * x[j]
+        base = s["vs_base_mem"] * math.exp(sum(fit["c"][k] * x[k] for k in FIT_KEYS if k != "flat") + ib)
+        mem = base * math.exp(fit["c"]["flat"] * x["flat"] + ia)
         p0, k = fit["p0"], fit["k"]
     else:
         base = (s["vs_base_mem"] * (1 + t["baseQ"] / 100) * (1 + t["tQty"] / 100)
@@ -1014,13 +1023,136 @@ def _fe_factors(t, suf):
     return pre, t["flat" + suf] + t["luck" + suf], post
 
 
+FE_FIT_KEYS = ("baseQ", "tQty", "app", "qty", "mult", "add")     # her eşya (S / T) için ayrı katsayılar
+FE_FIT_MIN_RUNS = 5        # bundan az bitmiş Memory materials koşusunda yazılı değerler kullanılır
+# Etkileşimler (iki fısıltı türü birlikte formülün söylediğinden iyi / kötü mü): bir çift ancak hem birlikte hem
+# ayrı ayrı yeterince koşuda görüldüyse modele girer; katsayı 0'dan ("etkileşim yok") başlar, güçlü çekilir.
+FE_INT_MIN_RUNS = 30       # etkileşimlere bakmak için en az bu kadar koşu
+FE_INT_MIN_EACH = 12       # çiftin birlikte / sadece biri / sadece öteki olduğu koşular, her biri en az bu kadar
+FE_INT_LAMBDA = 35.0       # 12 / 35: simülasyonla seçildi (etkileşim yoksa zararsız, varsa kayıp ~%20 az)
+FE_FIT_LAMBDA = {"scrap": 20.0, "thread": 12.0}  # yazılı değere (katsayı 1) çekme gücü: simülasyonla seçildi
+                                                # (v6.7; 8 gerçek dünya × 3 sapma × 10–80 koşu, en az FE kaybı)
+
+
+def _fe_feats(t, suf, base):
+    """Öğrenen model için özellikler (log): katsayılar 1 iken fe_expect'in yazılı-değer formülünün aynısı."""
+    pre = (1 + t["baseQ"] / 100) * (1 + t["app" + suf] / 100) * (1 + t["qty" + suf] / 100)
+    return {"baseQ": math.log(1 + t["baseQ"] / 100), "tQty": math.log(1 + t["tQty"] / 100),
+            "app": math.log(1 + t["app" + suf] / 100), "qty": math.log(1 + t["qty" + suf] / 100),
+            "mult": math.log(1 + t["mult" + suf] / 100),
+            "add": math.log(1 + (t["flat" + suf] + t["luck" + suf]) / (base * pre))}
+
+
 def fe_expect(effects, s):
-    """-> {"scrap": beklenen Scrap, "thread": beklenen Thread}"""
+    """-> {"scrap": beklenen Scrap, "thread": beklenen Thread}. s["fit"] varsa koşulardan öğrenilen katsayılarla."""
     t = fe_totals(effects)
+    fit = s.get("fit")
     out = {}
     for x, suf in (("scrap", "S"), ("thread", "T")):
-        pre, add, post = _fe_factors(t, suf)
-        out[x] = (s["base"][x] * pre + add) * post
+        if fit:
+            f, xs = fit[x], _fe_feats(t, suf, s["base"][x])
+            eta = f["a"] + sum(f["c"][k] * xs[k] for k in FE_FIT_KEYS)
+            eta += sum(d * xs[i] * xs[j] for (i, j), d in f.get("inter", {}).items())
+            out[x] = math.exp(eta)
+        else:
+            pre, add, post = _fe_factors(t, suf)
+            out[x] = (s["base"][x] * pre + add) * post
+    return out
+
+
+def _ppois(X, y, lam, np, prior=None, lams=None):
+    """Cezalı Poisson regresyonu: y ~ Poisson(exp(a + X·c)), c önsele çekilir (varsayılan 1 = yazılı değer),
+    a serbest. prior / lams: sütun başına önsel ve çekme gücü (etkileşim sütunları 0'a). -> (a, c)"""
+    n, k = X.shape
+    X1 = np.hstack([np.ones((n, 1)), X])
+    prior = np.concatenate([[0.0], np.ones(k) if prior is None else np.asarray(prior, dtype=float)])
+    P = np.diag([0.0] + ([lam] * k if lams is None else list(lams)))
+    beta = prior.copy()
+    beta[0] = math.log(y.mean() + 0.5) - float(X.mean(0) @ prior[1:])
+
+    def obj(b):
+        eta = np.clip(X1 @ b, -20, 20)
+        return float(y @ eta - np.exp(eta).sum()) - 0.5 * float((b - prior) @ P @ (b - prior))
+
+    cur = obj(beta)
+    for _ in range(60):
+        mu = np.exp(np.clip(X1 @ beta, -20, 20))
+        grad = X1.T @ (y - mu) - P @ (beta - prior)
+        H = X1.T @ (X1 * mu[:, None]) + P + 1e-9 * np.eye(k + 1)
+        step = np.linalg.solve(H, grad)
+        t = 1.0
+        while t > 1e-4 and obj(beta + t * step) < cur:
+            t /= 2
+        beta = beta + t * step
+        new = obj(beta)
+        if abs(new - cur) < 1e-9:
+            break
+        cur = new
+    return float(beta[0]), beta[1:]
+
+
+def fe_fit(runs, base):
+    """Memory materials koşularından öğrenme: her fısıltı türünün Scrap / Thread'e gerçek etkisi (katsayı;
+    1 = yazdığı kadar). -> {"active", "runs", "scrap": {"a", "c"}, "thread": {...}}"""
+    rows = [r for r in fe_runs(runs) if run_whispers(r["effects"])]
+    info = {"active": len(rows) >= FE_FIT_MIN_RUNS, "runs": len(rows)}
+    if not info["active"]:
+        return info
+    try:
+        import numpy as np
+    except ImportError:
+        info["active"] = False
+        return info
+    for x, suf in (("scrap", "S"), ("thread", "T")):
+        X = np.array([[_fe_feats(fe_totals(run_whispers(r["effects"])), suf, base[x])[k] for k in FE_FIT_KEYS]
+                      for r in rows])
+        y = np.array([float(r["picks"].get(SCRAP_ID, 0) if x == "scrap" else
+                            sum(r["picks"].get(c, 0) for c in THREAD_IDS)) for r in rows])
+        pairs = _int_pairs(X, len(rows), np, FE_INT_MIN_RUNS, FE_INT_MIN_EACH)
+        cols = [X] + [(X[:, i] * X[:, j])[:, None] for i, j in pairs]
+        nk = len(FE_FIT_KEYS)
+        a, c = _ppois(np.hstack(cols), y, FE_FIT_LAMBDA[x], np,
+                      prior=[1.0] * nk + [0.0] * len(pairs),
+                      lams=[FE_FIT_LAMBDA[x]] * nk + [FE_INT_LAMBDA] * len(pairs))
+        info[x] = {"a": a, "c": {k: float(min(3.0, max(0.0, v))) for k, v in zip(FE_FIT_KEYS, c[:nk])},
+                   "inter": {(FE_FIT_KEYS[i], FE_FIT_KEYS[j]): float(max(-5.0, min(5.0, d)))
+                             for (i, j), d in zip(pairs, c[nk:])}}
+    return info
+
+
+def fe_interactions(s, typical, min_fe=0.2):
+    """Öğrenilen etkileşimler, okunur: [(metin, FE farkı)]. FE farkı = iki fısıltı (tipik değerleriyle) birlikte
+    seçildiğinde, formülün tek tek etkilerden beklediğine göre koşu başına fazladan (+) / eksik (−) FE."""
+    fit = s.get("fit")
+    if not fit:
+        return []
+    kinds = {"S": {"app": "appS", "qty": "qtyS", "mult": "multS", "add": "flatS"},
+             "T": {"app": "appT", "qty": "qtyT", "mult": "multT", "add": "flatT"}}
+    out = []
+    for x, suf, name in (("scrap", "S", "Scrap"), ("thread", "T", "Thread")):
+        for (i, j), d in fit[x].get("inter", {}).items():
+            ki = kinds[suf].get(i, i)
+            kj = kinds[suf].get(j, j)
+            effs = [(ki, typical.get(ki, 0.0)), (kj, typical.get(kj, 0.0))]
+            no = dict(s, fit=dict(fit, **{x: dict(fit[x], inter={})}))
+            diff = fe_score(effs, s) - fe_score(effs, no)
+            if abs(diff) >= min_fe:
+                label = f"{EFFECT_NAMES.get(ki, ki)} + {EFFECT_NAMES.get(kj, kj)}"
+                out.append((f"{label}: {'better' if diff > 0 else 'worse'} together than expected "
+                            f"({diff:+.2f} FE per run)", diff))
+    return sorted(out, key=lambda t: -abs(t[1]))
+
+
+def fe_typical(runs):
+    """Memory materials koşularında her fısıltı türünün ortanca değeri (görülmediyse alev havuzunun ortası)."""
+    seen = {}
+    for r in fe_runs(runs):
+        for k, v in run_whispers(r["effects"]):
+            seen.setdefault(k, []).append(v)
+    out = {}
+    for side in FE_FLAME_POOL.values():
+        for k, vals in side:
+            out[k] = sorted(seen[k])[len(seen[k]) // 2] if seen.get(k) else vals[2]
     return out
 
 
@@ -1050,10 +1182,21 @@ def run_fe(r, prices):
     return sum(n * prices[c] for c, n in r.get("picks", {}).items() if prices.get(c))
 
 
-def fe_model(runs, prices):
+_FE_CACHE = {}
+
+
+def fe_model(runs, prices, cache=True):
     """FE planının ayarları. prices: {eşya: net FE (vergi düşülmüş)}; fiyatı bilinmeyen None.
     -> {"base": {...}, "unit": {...}, "n_base": taban için kullanılan koşu, "mix": {thread: oran},
-        "missing": [fiyatı olmayan eşyalar]}"""
+        "missing": [fiyatı olmayan eşyalar], "fit": öğrenilen model (FE_FIT_MIN_RUNS koşudan sonra)}"""
+    if cache:      # overlay her çizimde soruyor: koşular ve fiyatlar değişmediyse aynı sonuç
+        key = (tuple((r["t"], tuple(sorted(r["picks"].items())), len(r["effects"])) for r in fe_runs(runs)),
+               tuple(sorted((k, v) for k, v in prices.items() if v is not None)))
+        if _FE_CACHE.get("key") == key:
+            return _FE_CACHE["val"]
+        val = fe_model(runs, prices, cache=False)
+        _FE_CACHE.update(key=key, val=val)
+        return val
     recent = fe_runs(runs)[-FE_BASE_RUNS:]
     base = dict(FE_DEFAULTS)
     if recent:
@@ -1072,8 +1215,97 @@ def fe_model(runs, prices):
     missing = [FE_ITEMS[c] for c in [SCRAP_ID] + [c for c, n in mix.items() if n] if not prices.get(c)]
     thread_v = sum(n * prices[c] for c, n in priced.items()) / sum(priced.values()) if priced else 0.0
     total = sum(mix.values())
-    return {"base": base, "unit": {"scrap": prices.get(SCRAP_ID) or 0.0, "thread": thread_v},
-            "n_base": len(recent), "mix": {c: n / total for c, n in mix.items() if n}, "missing": missing}
+    out = {"base": base, "unit": {"scrap": prices.get(SCRAP_ID) or 0.0, "thread": thread_v},
+           "n_base": len(recent), "mix": {c: n / total for c, n in mix.items() if n}, "missing": missing}
+    fit = fe_fit(runs, base)
+    out["fit_info"] = fit
+    if fit["active"]:
+        out["fit"] = fit
+    return out
+
+
+FE_KIND_NAMES = {"baseQ": "Base quantity", "tQty": "Treasure quantity", "app": "appear", "qty": "quantity",
+                 "mult": "multiply", "add": "flat / lucky extra"}
+
+
+def describe_fe_learned(fit):
+    """Koşulardan öğrenilen ve yazılı değerden belirgin ayrılan etkiler (okunur)."""
+    if not fit or not fit.get("active"):
+        return ""
+    parts = []
+    for x, name in (("scrap", "Scrap"), ("thread", "Thread")):
+        for k in FE_FIT_KEYS:
+            c = fit[x]["c"][k]
+            label = FE_KIND_NAMES[k] if k in ("baseQ", "tQty") else f"{name} {FE_KIND_NAMES[k]}"
+            if k in ("baseQ", "tQty"):
+                label += f" ({name})"
+            if c >= 1.2:
+                parts.append(f"{label} stronger than written (×{c:.2f})")
+            elif c <= 0.8:
+                parts.append(f"{label} weaker than written (×{c:.2f})")
+    head = f"From your {fit['runs']} runs" + (" (early estimate)" if fit["runs"] < 20 else "")
+    return head + ": " + ("; ".join(parts) if parts else "whispers work about as written.")
+
+
+def fe_whisper_stats(runs, prices, bootstrap=True):
+    """Memory materials: fısıltı türlerinin karşılaştırması (kırmızı planındaki tablonun FE hâli).
+    [{key, n_with, n_without, avg_with, avg_without (FE / koşu), typical, model (bir tipik fısıltının boş bir koşuya
+    kattığı FE), lo, hi, confidence}]. Rarity bu planda sayılmaz (confidence None)."""
+    done = [r for r in fe_runs(runs) if run_whispers(r["effects"])]
+    s = fe_model(runs, prices)
+    rows = []
+    for k in ("appS", "qtyS", "flatS", "luckS", "multS", "appT", "qtyT", "flatT", "luckT", "multT",
+              "baseQ", "tQty", "rarity"):
+        vals, w, wo = [], [], []
+        for r in done:
+            wh = [v for kk, v in run_whispers(r["effects"]) if kk == k]
+            vals += wh
+            (w if wh else wo).append(r)
+        if not vals:
+            continue
+        avg = lambda rs: sum(run_fe(r, prices) for r in rs) / len(rs) if rs else None
+        rows.append({"key": k, "n_with": len(w), "n_without": len(wo), "avg_with": avg(w), "avg_without": avg(wo),
+                     "typical": sorted(vals)[len(vals) // 2]})
+    eff = lambda d, sx: fe_score([(d["key"], d["typical"])], sx) - fe_score([], sx)
+    for d in rows:
+        d["model"] = eff(d, s)
+        d["lo"] = d["hi"] = d["model"]
+    if bootstrap and len(done) >= FE_FIT_MIN_RUNS:
+        import random
+        rnd = random.Random(1)
+        samples = {d["key"]: [] for d in rows}
+        for _ in range(BOOTSTRAP_N):
+            sb = fe_model([rnd.choice(done) for _ in done], prices, cache=False)
+            for d in rows:
+                samples[d["key"]].append(eff(d, sb))
+        for d in rows:
+            xs = sorted(samples[d["key"]])
+            d["lo"], d["hi"] = xs[len(xs) // 10], xs[(len(xs) * 9) // 10]
+    for d in rows:
+        n_min = min(d["n_with"], d["n_without"])
+        width, est = d["hi"] - d["lo"], abs(d["model"])
+        if d["key"] == "rarity":
+            d["confidence"] = None
+        elif n_min < COMPARE_MIN_CONTRAST or len(done) < FE_FIT_MIN_RUNS:
+            d["confidence"] = "Insufficient"
+        elif d["lo"] <= 0.01 or width > est:
+            d["confidence"] = "Low"
+        elif n_min >= 10 and width <= 0.5 * est:
+            d["confidence"] = "Good"
+        else:
+            d["confidence"] = "Preliminary"
+    return sorted(rows, key=lambda d: (d["confidence"] in (None, "Insufficient"), -d["model"]))
+
+
+def fe_combo_stats(runs, prices):
+    """Aynı fısıltı türü kombinasyonu en az COMBO_MIN_RUNS Memory materials koşusunda görüldüyse:
+    [(kısa yazım, koşu sayısı, ortalama FE)], ortalamaya göre."""
+    grp = {}
+    for r in fe_runs(runs):
+        if run_whispers(r["effects"]):
+            grp.setdefault(_combo_name(r["effects"]), []).append(run_fe(r, prices))
+    return sorted(((n, len(v), sum(v) / len(v)) for n, v in grp.items() if len(v) >= COMBO_MIN_RUNS),
+                  key=lambda c: -c[2])
 
 
 def fe_flame_advice(picked, s, tiers=None):
@@ -1129,7 +1361,13 @@ def fe_reason_flame(picked, out, best, tiers=None):
 #   kırmızı: rarity üssü Poisson olabilirliğiyle bulunur (önsel: ayardaki üs); kırmızı yokken önsel kalır.
 # --------------------------------------------------------------------------- #
 FIT_MIN_RUNS = 5      # bundan az koşuda öneriler elle kurulan modelle yapılır
-FIT_LAMBDA = 6.0      # önsele çekme gücü (≈20 koşuda katsayı yarı yola gelir)
+# Etkileşimler (iki fısıltı türü birlikte formülün söylediğinden fazla / az memory getiriyor mu): bir çift ancak hem
+# birlikte hem ayrı ayrı yeterince koşuda görüldüyse modele girer; katsayı 0'dan başlar, güçlü çekilir.
+INT_MIN_RUNS = 30
+INT_MIN_EACH = 12     # simülasyonla seçildi (8 / 12 ve çekim 20 / 35 / 50 denendi)
+INT_LAMBDA = 20.0
+FIT_LAMBDA = 20.0     # önsele çekme gücü: simülasyonla seçildi (v6.7; 6/12/20/35/60/100 denendi, 20 en az
+                      # kayıp: yazıldığı gibi çalışan dünyada az koşuda sapmaz, sapan dünyada 30–60 koşuda öğrenir)
 TARGET_KINDS = ["baseQ", "tQty", "appear", "memQty", "flat", "luck", "rarity"]
 
 
@@ -1156,8 +1394,15 @@ def fit_model(runs, s):
     X = np.array([[_features(t, s["vs_base_mem"])[k] for k in FIT_KEYS] for t, _, _ in rows])
     y = np.array([m for _, m, _ in rows], dtype=float)
     has_red = np.array([bool(red) for *_, red in rows])
-    c = _poisson_fit(X, y, np, thr=thr, has_red=has_red)
-    info["c"] = {k: float(min(3.0, max(0.0, v))) for k, v in zip(FIT_KEYS, c)}
+    pairs = _int_pairs(X, len(rows), np, INT_MIN_RUNS, INT_MIN_EACH)
+    nk = len(FIT_KEYS)
+    Xa = np.hstack([X] + [(X[:, i] * X[:, j])[:, None] for i, j in pairs])
+    c = _poisson_fit(Xa, y, np, thr=thr, has_red=has_red,
+                     prior=[FIT_PRIOR[k] for k in FIT_KEYS] + [0.0] * len(pairs),
+                     lams=[FIT_LAMBDA] * nk + [INT_LAMBDA] * len(pairs))
+    info["c"] = {k: float(min(3.0, max(0.0, v))) for k, v in zip(FIT_KEYS, c[:nk])}
+    # JSON'a yazılabilsin: çift anahtarı "tür*tür"
+    info["inter"] = {f"{FIT_KEYS[i]}*{FIT_KEYS[j]}": float(max(-5.0, min(5.0, d))) for (i, j), d in zip(pairs, c[nk:])}
     # rarity üssü: kırmızı sayısı ~ Poisson(p0 × memory × (1+rarity)^k), p0 profillenir
     m = np.array([m for _, m, _ in rows], dtype=float)
     red = np.array([x for *_, x in rows], dtype=float)
@@ -1176,6 +1421,41 @@ def fit_model(runs, s):
     return info
 
 
+def _int_pairs(X, n, np, min_runs, min_each):
+    """Etkileşimine bakılabilecek tür çiftleri (sütun sıraları): yeterli koşu ve her durumda yeterli örnek."""
+    if n < min_runs:
+        return []
+    on = X > 1e-9
+    out = []
+    for i in range(X.shape[1]):
+        for j in range(i + 1, X.shape[1]):
+            both = int((on[:, i] & on[:, j]).sum())
+            only_i = int((on[:, i] & ~on[:, j]).sum())
+            only_j = int((~on[:, i] & on[:, j]).sum())
+            if min(both, only_i, only_j) >= min_each:
+                out.append((i, j))
+    return out
+
+
+def red_interactions(s, typical, min_mem=0.3):
+    """Kırmızı planı: öğrenilen etkileşimler, okunur: [(metin, memory farkı)]. Fark = iki fısıltı (tipik
+    değerleriyle) birlikte seçildiğinde, tek tek etkilerden beklenene göre koşu başına fazladan (+) / eksik (−) memory."""
+    fit = s.get("fit")
+    if not fit or not fit.get("inter"):
+        return []
+    out = []
+    no = dict(s, fit=dict(fit, inter={}))
+    for pair in fit["inter"]:
+        i, j = pair.split("*")
+        effs = [(i, typical.get(i, 0.0)), (j, typical.get(j, 0.0))]
+        diff = breakdown(effs, s)[0] - breakdown(effs, no)[0]
+        if abs(diff) >= min_mem:
+            label = f"{EFFECT_NAMES[i]} + {EFFECT_NAMES[j]}"
+            out.append((f"{label}: {'more' if diff > 0 else 'fewer'} Hero Memories together than expected "
+                        f"({diff:+.1f} per run)", diff))
+    return sorted(out, key=lambda t: -abs(t[1]))
+
+
 def success_threshold(counts):
     """Başarı eşiği: kırmızısız koşuların ortanca memory sayısı (aşağı yuvarlanır).
     Bu sayı ve altı başarısız. Veri değiştikçe eşik de değişir."""
@@ -1186,15 +1466,15 @@ def success_threshold(counts):
     return int(c[n // 2] if n % 2 else (c[n // 2 - 1] + c[n // 2]) / 2)
 
 
-def _poisson_fit(X, y, np, thr=None, has_red=None):
+def _poisson_fit(X, y, np, thr=None, has_red=None, prior=None, lams=None):
     """Cezalı Poisson regresyonu (Gauss-Newton): memory ~ Poisson(μ = exp(a + X·c)), c önsele çekilir.
     a (kişinin taban seviyesi: loot filtresi, toplama alışkanlığı) serbest.
     thr verilirse başarı etiketi de olabilirliğe girer: başarılı = kırmızı var ya da memory > thr,
     P(başarılı) = P(memory > thr | μ). Kırmızılı koşuların sayısı kullanılmaz (az memory'yle cezalanmaz). -> c"""
     n, k = X.shape
     X1 = np.hstack([np.ones((n, 1)), X])
-    prior = np.concatenate([[0.0], [FIT_PRIOR[key] for key in FIT_KEYS]])
-    P = np.diag([0.0] + [FIT_LAMBDA] * k)
+    prior = np.concatenate([[0.0], [FIT_PRIOR[key] for key in FIT_KEYS] if prior is None else list(prior)])
+    P = np.diag([0.0] + ([FIT_LAMBDA] * k if lams is None else list(lams)))
     red = has_red if has_red is not None else np.zeros(n, dtype=bool)
     w_cnt = (~red).astype(float)                       # sayı kanıtı: kırmızısız koşular
     lab = thr is not None
@@ -1435,6 +1715,18 @@ def share_summary(runs, plan, settings, prices, version):
                  + " / ".join(f"{thr[c] / len(frs):.1f}" for c in THREAD_IDS),
                  f"- Prices after tax: Scrap {s['unit']['scrap']:.3f} FE · Thread {s['unit']['thread']:.3f} FE "
                  f"(average of the qualities picked up)", ""]
+        rows = [d for d in fe_whisper_stats(runs, prices, bootstrap=False) if d["key"] != "rarity"]
+        if rows and s.get("fit"):
+            f1 = lambda v: "—" if v is None else f"{v:.1f}"
+            lines += ["**Whisper types compared** (FE per run, learned from the runs)", "",
+                      _md_table(["Whisper type", "Runs with / w/o", "FE with", "FE w/o", "Effect (FE / run)", "Typical"],
+                                [(EFFECT_NAMES[d["key"]], f"{d['n_with']} / {d['n_without']}", f1(d["avg_with"]),
+                                  f1(d["avg_without"]), f"{d['model']:+.2f}", f"{d['typical']:g}") for d in rows]),
+                      "", describe_fe_learned(s["fit"]), ""]
+            inter = fe_interactions(s, fe_typical(runs))
+            if inter:
+                lines += ["**Whisper pairs that work differently together than expected**", ""]
+                lines += [f"- {txt}" for txt, _ in inter[:5]] + [""]
         if combos:
             lines += ["**Whisper combinations seen in 2+ runs** (average FE per run)", "",
                       _md_table(["Whispers", "Runs", "FE / run"], [(n, k, f"{a:.1f}") for n, k, a in combos[:8]]), ""]
@@ -1465,6 +1757,10 @@ def share_summary(runs, plan, settings, prices, version):
         lines += ["**Whisper types compared** (Hero Memories per run)", "",
                   _md_table(["Whisper type", "Runs with / w/o", "Avg with", "Avg w/o", "Estimated effect",
                              "Confidence"], rows), ""]
+    inter = red_interactions(model_settings(settings), typical_values(rr))
+    if inter:
+        lines += ["**Whisper pairs that work differently together than expected**", ""]
+        lines += [f"- {txt}" for txt, _ in inter[:5]] + [""]
     combos = combo_stats(rr)
     if combos:
         lines += [f"**Combinations seen in {COMBO_MIN_RUNS}+ runs**", "",

@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.6.2"
+APP_VERSION = "6.7"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -1696,6 +1696,9 @@ def run_gui(start_hidden=False):
     chart_title = _chart_card.winfo_children()[0].winfo_children()[0]
     chart_sub = _chart_card.winfo_children()[1]
     RED_RUNS_SUB = low_views["runs"][2]
+    RED_CMP_SUB = low_views["cmp"][2]
+    FE_CMP_SUB = ("FE each whisper type adds to a run, learned from your Memory materials runs. Whispers are often "
+                  "picked together, so “with / without” averages can mislead; the estimated effect separates them.")
 
     def fe_mode():
         return data["settings"].get("vs_plan") == "fe"
@@ -1715,13 +1718,13 @@ def run_gui(start_hidden=False):
         tvr.column("wh", width=150 if fe else 190)
         tvr.column("mem", width=100 if fe else 76)
         tvr.column("red", width=54 if fe else 44)
-        cmp_cell = seg_lbls["cmp"][0]
-        if fe:                    # fısıltı türleri karşılaştırması kırmızı planına ait
-            cmp_cell.pack_forget()
-            if low_state["key"] == "cmp":
-                show_low("runs")
-        elif not cmp_cell.winfo_ismapped():
-            cmp_cell.pack(side="left", padx=(0, 6))
+        # fısıltı türleri karşılaştırması iki planda da: FE planında değerler koşu başına FE
+        for col, red_h, fe_h in (("with", "Avg with", "FE with"), ("wo", "Avg w/o", "FE w/o"),
+                                 ("model", "Estimated effect", "Effect (FE / run)"), ("red", "Red / run", "Typical")):
+            retext(tvw, fe_h if fe else red_h, ("heading", col))
+        low_views["cmp"] = (fr_cmp, "Whisper types compared", FE_CMP_SUB if fe else RED_CMP_SUB)
+        if low_state["key"] == "cmp":
+            lbl_low_sub.config(text=tr(low_views["cmp"][2]))
         if not fe:
             low_views["runs"] = (fr_runs, "Run history", RED_RUNS_SUB)
             if low_state["key"] == "runs":
@@ -2187,6 +2190,12 @@ def run_gui(start_hidden=False):
             root.update()
             time.sleep(0.06)
             img = SR.grab_screen(int(data["settings"].get("monitor", 1)))
+            # ikinci kare: yenileme animasyonu sürüyorsa fiyatı kayan kartlar okunmaz, tekrar okumada denenir
+            time.sleep(0.15)
+            try:
+                img2 = SR.grab_screen(int(data["settings"].get("monitor", 1)))
+            except Exception:
+                img2 = None
         except Exception as e:
             st["ocr_msg"] = f"⚠ Screen capture failed: {e}"
             st["pic"] = False
@@ -2203,7 +2212,7 @@ def run_gui(start_hidden=False):
 
         def work():
             try:
-                offers = SR.read_offers(img, BLESSING_NAMES)
+                offers = SR.read_offers(img, BLESSING_NAMES, img2)
                 ok = SR.looks_like_blessings(offers)
                 if ok:
                     try:
@@ -2999,8 +3008,63 @@ def run_gui(start_hidden=False):
                                                 f"average {avg:.1f} per run"),
                               fill=ACC, font=(F_NUM, 8), anchor="ne")
 
+    def render_fe_cmp():
+        """Memory materials: fısıltı türlerinin koşu başına FE'ye etkisi (öğrenen modelden) ve kombinasyonlar."""
+        prices = fe_prices()
+        rows = VS.fe_whisper_stats(vs_log.runs, prices)
+        s = fe_s()
+        info = s.get("fit_info") or {"runs": 0, "active": False}
+        f2 = lambda v: "—" if v is None else f"{v:.1f}"
+        for i, d in enumerate(rows):
+            if d["key"] == "rarity":
+                model, conf, tag = "not counted", "—", "Insufficient"
+            elif d["confidence"] == "Insufficient":
+                model, conf, tag = "—", "Insufficient", "Insufficient"
+            else:
+                model = f"{d['model']:+.2f}  ({d['lo']:.2f}–{d['hi']:.2f})"
+                conf = tag = d["confidence"]
+            tvw.insert("", "end", values=trv((VS.EFFECT_NAMES[d["key"]], f"{d['n_with']} / {d['n_without']}",
+                                              f2(d["avg_with"]), f2(d["avg_without"]), model, conf,
+                                              f"{d['typical']:g}")), tags=zebra(tag, i))
+        tvw.configure(height=max(1, min(7, len(rows))))
+        lbl_cmp.config(text=tr("Effect = FE one typical whisper of this type adds to a run, at your prices (range: "
+                               "10–90% when the runs are resampled). Typical = the usual value of that whisper."))
+        done = info["runs"]
+        lines = [("Analysis summary", FG, True),
+                 (f"{done} finished Memory materials runs with whispers read", FG, False)]
+        if info["active"]:
+            lines.append((VS.describe_fe_learned(info), FG, False))
+            if done < VS.FE_INT_MIN_RUNS:
+                lines.append((f"Pairs of whispers are compared after {VS.FE_INT_MIN_RUNS} runs "
+                              f"({VS.FE_INT_MIN_RUNS - done} to go).", MUTED, False))
+            else:
+                inter = VS.fe_interactions(s, VS.fe_typical(vs_log.runs))
+                if inter:
+                    lines.append(("Whisper pairs that work differently together than expected:", FG, False))
+                    lines += [(f"   {txt}", ACC, False) for txt, _ in inter[:2]]
+                else:
+                    lines.append(("No whisper pair works differently together than expected.", MUTED, False))
+            lines.append(("The advice uses what was learned from your runs.", MUTED, False))
+        else:
+            lines.append((f"The advice uses the values written on the whispers; it starts learning after "
+                          f"{VS.FE_FIT_MIN_RUNS} finished runs ({max(0, VS.FE_FIT_MIN_RUNS - done)} to go).", MUTED, False))
+        combos = VS.fe_combo_stats(vs_log.runs, prices)
+        if combos:
+            lines.append((f"Combinations seen in {VS.COMBO_MIN_RUNS}+ runs (average FE per run):", FG, False))
+            lines += [(f"   {name}:  {avg:.1f} FE  ({n} runs)", MUTED, False) for name, n, avg in combos[:4]]
+        else:
+            lines.append((f"Combinations: none seen in {VS.COMBO_MIN_RUNS}+ runs yet.", MUTED, False))
+        for w in cmp_sum.winfo_children():
+            w.destroy()
+        for txt, col, bold in lines:
+            tk.Label(cmp_sum, text=tr(txt), bg=SURF2, fg=col, font=(F_UI, 9 if bold else 8, "bold" if bold else "normal"),
+                     anchor="w", justify="left", wraplength=640).pack(fill="x", padx=10, pady=(4 if bold else 0, 0))
+
     def render_cmp():
         tvw.delete(*tvw.get_children())
+        if fe_mode():
+            render_fe_cmp()
+            return
         runs = VS.red_runs(vs_log.runs)          # Memory materials koşuları karşılaştırmaya girmez
         rows = VS.whisper_stats(runs, data["settings"])
         done, left_out = VS.valid_runs(runs)
@@ -3039,6 +3103,17 @@ def run_gui(start_hidden=False):
                          else ""), {"Good": GOOD, "Preliminary": FG}.get(overall, WARN), False))
         if not red_ok:
             lines.append((f"Red chance: insufficient data ({n_red} of {VS.RED_MIN_TOTAL} red needed).", MUTED, False))
+        # fısıltı çiftleri: birlikte tek tek etkilerden beklenenden fazla / az memory
+        if len(done) < VS.INT_MIN_RUNS:
+            lines.append((f"Pairs of whispers are compared after {VS.INT_MIN_RUNS} runs "
+                          f"({VS.INT_MIN_RUNS - len(done)} to go).", MUTED, False))
+        else:
+            inter = VS.red_interactions(VS.model_settings(data["settings"]), VS.typical_values(runs))
+            if inter:
+                lines.append(("Whisper pairs that work differently together than expected:", FG, False))
+                lines += [(f"   {txt}", ACC, False) for txt, _ in inter[:2]]
+            else:
+                lines.append(("No whisper pair works differently together than expected.", MUTED, False))
         if combos:
             lines.append(("Combinations seen in 3+ runs (average memories):", FG, False))
             lines += [(f"   {name}:  {avg:.1f}  ({n} runs, {red} red)", MUTED, False) for name, n, avg, red in combos[:4]]
@@ -3844,6 +3919,7 @@ def run_gui(start_hidden=False):
             detail_card("No run selected", "Click a run in the table or a bar in the chart.", MUTED,
                         note="A run counts toward the averages when you leave the Void Sea map.")
         draw_chart()
+        render_cmp()
 
     def show_run(_e=None):
         sel = tvr.selection()
@@ -4132,6 +4208,8 @@ def run_gui(start_hidden=False):
         src = (("from your last run" if s["n_base"] == 1 else f"from your last {s['n_base']} runs") if s["n_base"]
                else "default — learns from your runs")
         line(f"Base per run: {s['base']['scrap']:.0f} Scrap, {s['base']['thread']:.1f} Thread ({src})", MUTED, 8)
+        if s.get("fit"):                     # koşulardan öğrenilen etkiler (yazılı değerden farklıysa)
+            line(VS.describe_fe_learned(s["fit"]), MUTED, 8)
         mix = " / ".join(f"{VS.THREAD_SHORT[c]} {r * 100:.0f}%" for c, r in s["mix"].items())
         line(f"Price after tax: Scrap {s['unit']['scrap']:.3f} FE · Thread {s['unit']['thread']:.3f} FE ({mix})",
              MUTED, 8)

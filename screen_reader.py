@@ -307,14 +307,23 @@ def _read_price_once(im, cx, s, np, Image, pytesseract, lo, spread):
         t_txt += d
         t_sure = t_sure and sure
 
-    # 2) Tesseract
-    o_txt = ""
-    img = _to_img(sub, np, Image, 4)
-    for psm in (7, 8, 10):
-        t = pytesseract.image_to_string(img, config=f"--psm {psm} -c tessedit_char_whitelist=0123456789").strip()
-        if t.isdigit():
-            o_txt = t
-            break
+    # 2) Tesseract: rakam yüksekliğine göre üç boyda okunur, çoğunluk alınır. Sabit 4× büyütme büyük arayüz
+    #    ölçeğinde (rakam 18 px) fazla geliyordu: "75" -> "15" / "5" (3840×1600, GitHub #6). 1440p'deki eski boy
+    #    (~13 px × 4) bu boyların içinde.
+    o_reads = []
+    gh = max(1, sub.shape[0])
+    base = _to_img(sub, np, Image, 1)
+    for target in (26, 52, 38):
+        f = max(1.0, target / gh)
+        img = base.resize((max(1, int(base.width * f)), max(1, int(base.height * f))), Image.LANCZOS)
+        for psm in (7, 8, 10):
+            t = pytesseract.image_to_string(img, config=f"--psm {psm} -c tessedit_char_whitelist=0123456789").strip()
+            if t.isdigit():
+                o_reads.append(t)
+                break
+        if len(o_reads) == 2 and o_reads[0] == o_reads[1]:
+            break                                       # ilk iki boy uyuştu: üçüncüye gerek yok
+    o_txt = max(o_reads, key=lambda t: (o_reads.count(t), t == t_txt)) if o_reads else ""
 
     # 3) karar: şablon eminse onu, değilse ikisi aynıysa onu; aksi halde okunamadı
     if t_txt and t_sure:
@@ -517,15 +526,39 @@ def _second_row_shift(im, cx, s, np):
     return int(round(CARD_ROW_DY * s))
 
 
-def read_offers(im, item_names=None):
-    """PIL görüntüsünden 8 teklifi okur.
+def _price_moving(a, b, cx, s, np):
+    """İki ardışık karede kartın fiyat yazısı (beyaz maske) farklı mı: yenileme animasyonunda kart kayıyor /
+    beliriyor, o karede rakamlar "emin" ama yanlış okunabiliyor (GitHub #6). İkon parlaması maskeyi değiştirmez."""
+    box = (int(cx - 6 * s), int(312 * s), int(cx + 62 * s), int(385 * s))
+    ma = _white(np.asarray(a.crop(box)), np, 150, 80)
+    mb = _white(np.asarray(b.crop(box)), np, 150, 80)
+    n = max(int(ma.sum()), int(mb.sum()))
+    if n == 0:
+        return False
+
+    def grow(m):                     # 1 px tolerans: kenar pikselindeki küçük farklar hareket sayılmasın
+        g = m.copy()
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)):
+            g |= np.roll(np.roll(m, dy, 0), dx, 1)
+        return g
+    diff = (ma & ~grow(mb)) | (mb & ~grow(ma))
+    return int(diff.sum()) > 0.15 * n
+
+
+def read_offers(im, item_names=None, im2=None):
+    """PIL görüntüsünden 8 teklifi okur. im2: ~0.15 sn sonra yakalanan ikinci kare (varsa fiyatı hâlâ hareket
+    eden kart okunmaz, "card still moving" sorunu verilir; tekrar okuma onu yeniden dener).
     Dönen: [{"slot","text","cid","qty","price","sold","excluded"}]"""
     np, Image, pytesseract = _imports()
     W, H = im.size
+    if im2 is not None and im2.size != im.size:
+        im2 = None
     if H < 1400:
         # 1080p gibi düşük çözünürlükte beyaz yazı piksel piksel ayrılınca rakamlar bozuluyor:
         # önce yumuşak büyütüp 1440p boyutunda oku (rakam şablonları da bu boyuttan)
         im = im.resize((round(W * 1440 / H), 1440), Image.LANCZOS)
+        if im2 is not None:
+            im2 = im2.resize(im.size, Image.LANCZOS)
         W, H = im.size
     s = H / 1440.0
     # kartları ekranda bul; bulunamazsa 1440p varsayılan konumları (arayüz sola dayalı, geniş ekranda da)
@@ -534,7 +567,7 @@ def read_offers(im, item_names=None):
         centers, s = found
     else:
         centers = [((CARD_X0 + CARD_DX * i) * s, 0) for i in range(N_CARDS)]
-    full = im
+    full, full2 = im, im2
     # her satırın dikey hizası: üst kenarı bulunan kartların ortancası (satılmış kart sönük, kenarı bulunamıyor)
     row_tops = {}
     for cx, row_dy in centers:
@@ -549,6 +582,7 @@ def read_offers(im, item_names=None):
         cx, row_dy = centers[i]
         # alt satırdaki kart: görüntü o satır üstte olacak şekilde kaydırılır, gerisi aynı
         im = full.crop((0, row_dy, W, H)) if row_dy else full
+        im2 = (full2.crop((0, row_dy, W, H)) if row_dy else full2) if full2 is not None else None
         # dikey hizalama: kartın bulunan üst kenarına göre (yenileme animasyonu, farklı arayüz ölçeği)
         top = _card_top(im, cx, s, np, default=None)
         if top is None or abs(top - CARD_TOP * s) > 80 * s:
@@ -589,7 +623,13 @@ def read_offers(im, item_names=None):
             except Exception:
                 rec["icon"] = None
             rec["cid"], rec["qty"], rec["excluded"] = best[1]
-            if not rec["excluded"]:
+            moving = False
+            if im2 is not None and not rec["excluded"]:
+                cim2 = im2.crop((0, dy, W, int(460 * s) + dy)) if dy else im2
+                moving = _price_moving(cim, cim2, cx, s, np)
+            if moving:
+                rec["price"], rec["glyphs"], rec["price_why"] = None, [], "card still moving (refresh animation)"
+            elif not rec["excluded"]:
                 rec["price"], rec["glyphs"], rec["price_why"] = _read_price(cim, cx, s, np, Image, pytesseract)
                 rec["price_img"] = cim.crop((int(cx - 30 * s), int(325 * s), int(cx + 62 * s), int(370 * s)))
             # Okunamayan kartın NEDENİ (panelde gösterilir)
