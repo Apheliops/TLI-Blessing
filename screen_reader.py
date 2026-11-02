@@ -169,10 +169,18 @@ def _load_templates(np):
     if _templates is None:
         _templates = []
         for f in (BUILTIN_DIGITS, LEARNED_DIGITS):
+            builtin = list(_templates)
             try:
                 with open(f, encoding="utf-8") as fh:
                     for t in json.load(fh):
-                        _templates.append((t["d"], np.array(t["v"], dtype=float), float(t["a"])))
+                        v, a = np.array(t["v"], dtype=float), float(t["a"])
+                        # öğrenilmiş şablon hazır şablonlara göre açıkça başka bir rakamsa yanlış etiketlenmiştir
+                        # (yenilenmiş kartın eski fiyatıyla öğrenilmiş olabilir): kullanılmaz
+                        if builtin:
+                            d, sure = _classify(v, a, np, temps=builtin)
+                            if sure and d != t["d"]:
+                                continue
+                        _templates.append((t["d"], v, a))
             except Exception:
                 pass
     return _templates
@@ -208,12 +216,12 @@ def _glyph_vec(g, np, Image):
     return np.asarray(pad).astype(float).ravel() / 255, g.shape[1] / g.shape[0]
 
 
-def _classify(vec, asp, np):
-    """-> (rakam, emin_mi)"""
+def _classify(vec, asp, np, top=None, temps=None):
+    """-> (rakam, emin_mi). top: verilirse en yakın iki rakam eklenir. temps: kullanılacak şablonlar (varsayılan hepsi)."""
     best = {}
     img = vec.reshape(GH, GW)
     shifts = [np.roll(np.roll(img, dy, 0), dx, 1).ravel() for dy in (-1, 0, 1) for dx in (-1, 0, 1)]
-    for d, v, a in _load_templates(np):
+    for d, v, a in (_load_templates(np) if temps is None else temps):
         if v.size != vec.size:
             continue
         dist = min(float(((sh - v) ** 2).sum()) for sh in shifts) + 20 * (asp - a) ** 2
@@ -224,6 +232,8 @@ def _classify(vec, asp, np):
     ranked = sorted(best.items(), key=lambda x: x[1])
     d1, x1 = ranked[0]
     x2 = ranked[1][1] if len(ranked) > 1 else 1e9
+    if top is not None:
+        top.extend(d for d, _ in ranked[:2])
     sure = x2 >= 1.3 * max(x1, 0.5)          # en yakın rakam, ikinciden belirgin şekilde yakın
     return d1, sure
 
@@ -298,9 +308,10 @@ def _read_price_once(im, cx, s, np, Image, pytesseract, lo, spread):
         sub = sub[:, spans[0][0]:]
     # 1) şablonlarla
     glyphs = [_glyph_vec(g, np, Image) for g in gl]
-    t_txt, t_sure = "", bool(glyphs)
+    t_txt, t_sure, tops = "", bool(glyphs), []
     for v, a in glyphs:
-        d, sure = _classify(v, a, np)
+        tops.append([])
+        d, sure = _classify(v, a, np, tops[-1])
         if d is None:
             t_txt, t_sure = "", False
             break
@@ -330,6 +341,11 @@ def _read_price_once(im, cx, s, np, Image, pytesseract, lo, spread):
         return int(t_txt), glyphs, ""
     if t_txt and t_txt == o_txt:
         return int(t_txt), glyphs, ""
+    # şablon emin değil, Tesseract en az iki boyda aynı değeri okudu ve uyuşmayan her rakam şablonun ikinci
+    # adayı: Tesseract'ınki kabul. Büyük arayüz ölçeğinde hazır şablonlar zayıf kalıyor, "106" -> 105 / 106 (GitHub #7)
+    if (t_txt and o_txt and len(o_txt) == len(t_txt) and o_reads.count(o_txt) >= 2
+            and all(a == b or b in tp for a, b, tp in zip(t_txt, o_txt, tops))):
+        return int(o_txt), glyphs, ""
     if not t_txt and o_txt and not _load_templates(np):
         return int(o_txt), glyphs, ""                   # şablon dosyası yoksa eski yöntem
     if not glyphs:

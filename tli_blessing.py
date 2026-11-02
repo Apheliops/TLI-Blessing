@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.7.1"
+APP_VERSION = "6.7.2"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -2198,6 +2198,7 @@ def run_gui(start_hidden=False):
             ov.attributes("-alpha", 0.0)
             root.update()
             time.sleep(0.06)
+            grab_t = time.time()
             img = SR.grab_screen(int(data["settings"].get("monitor", 1)))
             # ikinci kare: yenileme animasyonu sürüyorsa fiyatı kayan kartlar okunmaz, tekrar okumada denenir
             time.sleep(0.15)
@@ -2233,7 +2234,7 @@ def run_gui(start_hidden=False):
                         img.save(user_file("last_scan.png"))
                     except Exception:
                         pass
-                q.put(("offers", {"offers": offers, "ok": ok, "why": why, "img": img}))
+                q.put(("offers", {"offers": offers, "ok": ok, "why": why, "img": img, "grab_t": grab_t}))
             except Exception as e:
                 q.put(("ocr_error", str(e)))
 
@@ -2299,6 +2300,7 @@ def run_gui(start_hidden=False):
                 new = [o if (o["problem"] == "" or old.get(o["slot"], {}).get("problem", "x") != "") else old[o["slot"]]
                        for o in new]
             st["offers"] = new
+            st["offers_t"] = v.get("grab_t") or time.time()
             for o in new:             # ekranda görülen her eşya/paket listeye girsin
                 if o["cid"] and not o["excluded"] and isinstance(o["qty"], int) and [o["cid"], o["qty"]] not in data["catalog"]:
                     data["catalog"].append([o["cid"], o["qty"]])
@@ -4349,12 +4351,17 @@ def run_gui(start_hidden=False):
             same = [o for o in cand if o["cid"] == b["cid"] and (b["qty"] in (None, o["qty"]))]
             if len(same) == 1:
                 o = same[0]
-                try:
-                    import screen_reader as SR
-                    if SR.learn_price(o.get("glyphs") or [], b["ds"]):
-                        o["price"] = b["ds"]
-                except Exception:
-                    pass
+                # rakamlar sadece okunamamış (emin olunamamış) karttan ve okumadan sonra yenileme olmadıysa
+                # öğrenilir: yenilemeden sonra aynı eşya başka fiyatla gelince eski kartın "106"sı "105" diye
+                # öğrenilebiliyordu, sonraki okumalar bozuluyordu (GitHub #7)
+                fresh = st.get("refresh_t", 0) <= st.get("offers_t", 0)
+                if o["price"] is None and fresh:
+                    try:
+                        import screen_reader as SR
+                        if SR.learn_price(o.get("glyphs") or [], b["ds"]):
+                            o["price"] = b["ds"]
+                    except Exception:
+                        pass
                 hit = [o]
         if len(hit) == 1:
             o = hit[0]
@@ -4486,6 +4493,8 @@ def run_gui(start_hidden=False):
                     # sadece canlı olaylar (ilk log taramasındaki eski olaylar değil)
                     if abs(time.time() - v["ts"]) < 20:
                         st["shop_open"] = True
+                        if v["why"] == "refresh":
+                            st["refresh_t"] = v["ts"]      # bundan önce okunan kartlar artık ekranda değil
                     if data["settings"].get("auto_ocr", True) and abs(time.time() - v["ts"]) < 20:
                         if ov_state_tab["tab"] != "bl" or ov_state["collapsed"]:
                             switch_tab("bl")
