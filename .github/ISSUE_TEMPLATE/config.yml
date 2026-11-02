@@ -1,5 +1,11 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Share your results
+    url: https://github.com/Apheliops/TLI-Blessing/discussions/new?category=show-and-tell
+    about: Show your Void Sea results and the whisper combinations that worked for you (Discussions).
+  - name: Questions and ideas
+    url: https://github.com/Apheliops/TLI-Blessing/discussions
+    about: Ask a question or suggest an idea in Discussions.
   - name: Discussion on r/TorchlightInfinite
     url: https://www.reddit.com/r/TorchlightInfinite/comments/1xkbvu0/tool_tli_blessing_helper_ds_calculator_overlay/
     about: General questions and feedback are also welcome in the Reddit thread.

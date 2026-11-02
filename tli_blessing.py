@@ -60,11 +60,13 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.6.1"
+APP_VERSION = "6.6.2"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
 ISSUES_NEW_URL = "https://github.com/Apheliops/TLI-Blessing/issues/new"
+# Sonuç paylaşımı: GitHub Discussions'ta "Show and tell" kategorisi (form: .github/DISCUSSION_TEMPLATE)
+SHARE_NEW_URL = "https://github.com/Apheliops/TLI-Blessing/discussions/new"
 # Topluluk fiyatları (isteğe bağlı, varsayılan kapalı): Cloudflare Worker, kodu server\ klasöründe.
 # Gönderilen: rastgele kurulum numarası + eşya numarası + fiyat + zaman. Başka hiçbir şey.
 PRICES_API = "https://tli-prices.tli-blessing.workers.dev/v1/prices"
@@ -1567,6 +1569,65 @@ def run_gui(start_hidden=False):
     tvr.pack(fill="both", expand=True)
     run_rows = {}
     show_low("runs")
+
+    def share_results():
+        """Seçili planın koşu özetini (Markdown) panoya kopyalar ve GitHub Discussions'ta yeni bir
+        "Show and tell" paylaşımı açar. Kişisel bilgi yok: fısıltı türleri, sayılar, gün, fiyatlar."""
+        import urllib.parse
+        import webbrowser
+        plan = data["settings"].get("vs_plan", "red")
+        title, body = VS.share_summary(vs_log.runs, plan, data["settings"], fe_prices(), APP_VERSION)
+        win = tk.Toplevel(root, bg=BG)
+        win.title(tr("Share results"))
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.transient(root)
+        try:
+            if st.get("win_icon"):
+                win.iconphoto(False, st["win_icon"])
+        except Exception:
+            pass
+        pad = dict(padx=20)
+        T(tk.Label(win, bg=BG, fg=FG, font=(F_UI, 13, "bold"), anchor="w"), "Share results").pack(
+            fill="x", pady=(18, 2), **pad)
+        btns = tk.Frame(win, bg=BG)
+        if title is None:
+            T(tk.Label(win, bg=BG, fg=MUTED, font=(F_UI, 9), anchor="w", justify="left", wraplength=400), body).pack(
+                fill="x", **pad)
+            T(ttk.Button(btns, command=win.destroy), "Close").pack(side="right")
+        else:
+            T(tk.Label(win, bg=BG, fg=MUTED, font=(F_UI, 9), anchor="w", justify="left", wraplength=400),
+              "Your run summary (whisper types, counts and dates; nothing personal) is copied. GitHub opens in "
+              "your browser: paste it with Ctrl+V into the Results box, add screenshots if you like, then press "
+              "“Start discussion”. A GitHub account is needed.").pack(fill="x", **pad)
+            tk.Label(win, text=title, bg=BG, fg=ACC, font=(F_UI, 9, "bold"), anchor="w").pack(
+                fill="x", pady=(10, 0), **pad)
+
+            def go():
+                root.clipboard_clear()
+                root.clipboard_append(body)
+                q_ = {"category": "show-and-tell", "title": title}
+                url = SHARE_NEW_URL + "?" + urllib.parse.urlencode({**q_, "results": body})
+                if len(url) > 7000:                  # çok uzun adres: özet sadece panodan yapıştırılır
+                    url = SHARE_NEW_URL + "?" + urllib.parse.urlencode(q_)
+                webbrowser.open(url)
+                win.destroy()
+
+            def copy_only():
+                root.clipboard_clear()
+                root.clipboard_append(body)
+                win.destroy()
+            T(ttk.Button(btns, style="Primary.TButton", command=go), "Copy and open GitHub").pack(side="right")
+            T(ttk.Button(btns, command=copy_only), "Copy only").pack(side="right", padx=8)
+        btns.pack(fill="x", pady=(16, 18), **pad)
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.update_idletasks()
+        x = root.winfo_rootx() + (root.winfo_width() - win.winfo_width()) // 2
+        y = root.winfo_rooty() + (root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        win.focus_force()
+
+    icon_button(seg, "\uE72D", "Share results", share_results, SURF, PRI).pack(side="right")
 
     # --- Inventory value sekmesi: oyundaki 4 envanter sekmesi, eşyalar toplam FE değerine göre ---
     inv_head = tk.Frame(tab_inv, bg=BG)

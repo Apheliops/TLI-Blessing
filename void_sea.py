@@ -25,8 +25,9 @@ import time
 # Fısıltı metinlerini etkiye çevirme
 # --------------------------------------------------------------------------- #
 NUM = r"(\d+(?:[.,]\d+)?)"
-# "%" OCR'da "o/o", "0/0", "°/o" ya da "96" ("20%" -> "2096") olarak okunabiliyor
-PCT = NUM + r"\s*(?:%|o/o|0/0|[°º]/o|96(?=\s))"
+# "%" OCR'da "o/o", "0/0", "°/o", "96" ("20%" -> "2096") ya da "chance" önünde "00" ("+21%" -> "+2100",
+# 3840×1600, GitHub #4) olarak okunabiliyor
+PCT = NUM + r"\s*(?:%|o/o|0/0|[°º]/o|96(?=\s)|00(?=\s*chance))"
 PCT_OPT = NUM + r"\s*(?:%|o/o|0/0|[°º]/o)?"
 
 
@@ -37,6 +38,10 @@ def _item_patterns(suf, word):
     item = r"memory\s*" + word
     return [
         ("mult" + suf, re.compile(PCT + r"\s*chance\s*for\s*" + item + r"\s*dropped[^%]*?"
+                                  r"(?:multiplied\s*by\s*" + NUM + r"|doubled)", re.I),
+         lambda m: _f(m.group(1)) * ((_f(m.group(2)) if m.group(2) else 2.0) - 1)),
+        # "%" hiç okunamazsa ("+21 chance for Memory Threads dropped … multiplied by 2", 3840×1600, #4)
+        ("mult" + suf, re.compile(NUM + r"\s*chance\s*for\s*" + item + r"\s*dropped[^%]*?"
                                   r"(?:multiplied\s*by\s*" + NUM + r"|doubled)", re.I),
          lambda m: _f(m.group(1)) * ((_f(m.group(2)) if m.group(2) else 2.0) - 1)),
         ("app" + suf, re.compile(PCT + r"\s*chance\s*for\s*" + item + r"\s*to\s*appear", re.I), lambda m: _f(m.group(1))),
@@ -704,7 +709,7 @@ def read_cards_color(img, lines):
     cx0 = sw[0][0] if sw else W / 2
     # arayüz ölçeği: sahne ekranın dikey ortasına göre çiziliyor; varsayılan ölçekte Switch merkezin 0.25·H
     # üstünde. Daha büyük ölçekte (ör. 21:9 ekranda %7-8) kartlar da birbirinden o oranda uzak.
-    ui = min(1.3, max(0.85, (0.5 * H - sw[0][1]) / (0.25 * H))) if sw else 1.0
+    ui = min(1.6, max(0.85, (0.5 * H - sw[0][1]) / (0.25 * H))) if sw else 1.0   # büyük arayüz ölçeği (#4)
     if abs(ui - 1.0) < 0.03:      # varsayılan ölçek (16:9): eski, denenmiş konumlar aynen kalsın
         ui = 1.0
     f = max(1.0, 1440 / H)       # 1080p'de kart yazısı 1440p'dekinin 3/4'ü: büyütmeyi ona göre artır
@@ -1390,6 +1395,85 @@ def combo_stats(runs):
             name = " + ".join(SHORT_NAMES.get(k, k) + (f" ×{n}" if n > 1 else "") for k, n in key)
             out.append((name, len(rs), sum(r["memories"] for r in rs) / len(rs), sum(r["red"] for r in rs)))
     return sorted(out, key=lambda c: -c[2])
+
+
+# --------------------------------------------------------------------------- #
+# Sonuç paylaşımı (GitHub Discussions · Show and tell): koşu kaydının özeti, Markdown
+# Kişisel bilgi yok: sadece fısıltı türleri, sayılar, tarih (gün), fiyatlar.
+# --------------------------------------------------------------------------- #
+def _md_table(head, rows):
+    out = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
+    out += ["| " + " | ".join(str(c) for c in r) + " |" for r in rows]
+    return "\n".join(out)
+
+
+def _combo_name(effects):
+    cnt = {}
+    for k, _v in run_whispers(effects):
+        cnt[k] = cnt.get(k, 0) + 1
+    return " + ".join(SHORT_NAMES.get(k, k) + (f" ×{n}" if n > 1 else "") for k, n in sorted(cnt.items())) or "not read"
+
+
+def share_summary(runs, plan, settings, prices, version):
+    """-> (başlık, Markdown özet) ya da (None, neden) — paylaşacak koşu yoksa."""
+    if plan == "fe":
+        frs = fe_runs(runs)
+        if not frs:
+            return None, "No finished Memory materials runs yet."
+        s = fe_model(runs, prices)
+        vals = [run_fe(r, prices) for r in frs]
+        scrap = [r["picks"].get(SCRAP_ID, 0) for r in frs]
+        thr = {c: sum(r["picks"].get(c, 0) for r in frs) for c in THREAD_IDS}
+        grp = {}
+        for r, v in zip(frs, vals):
+            grp.setdefault(_combo_name(r["effects"]), []).append(v)
+        combos = sorted(((n, len(v), sum(v) / len(v)) for n, v in grp.items() if len(v) >= 2), key=lambda c: -c[2])
+        lines = [f"**Plan:** Memory materials (Wealth + Wonder) · **App:** v{version}", "",
+                 f"- Runs: **{len(frs)}** · FE earned: **{sum(vals):.1f}** · FE per run: **{sum(vals) / len(vals):.1f}** "
+                 f"(after tax)",
+                 f"- Per run: {sum(scrap) / len(frs):.0f} Memory Scrap · Threads Magic / Rare / Epic: "
+                 + " / ".join(f"{thr[c] / len(frs):.1f}" for c in THREAD_IDS),
+                 f"- Prices after tax: Scrap {s['unit']['scrap']:.3f} FE · Thread {s['unit']['thread']:.3f} FE "
+                 f"(average of the qualities picked up)", ""]
+        if combos:
+            lines += ["**Whisper combinations seen in 2+ runs** (average FE per run)", "",
+                      _md_table(["Whispers", "Runs", "FE / run"], [(n, k, f"{a:.1f}") for n, k, a in combos[:8]]), ""]
+        lines += ["**Last runs**", "",
+                  _md_table(["Date", "Whispers", "Scrap", "Thread M / R / E", "FE"],
+                            [(r["t"][:10], _combo_name(r["effects"]), r["picks"].get(SCRAP_ID, 0),
+                              " / ".join(str(r["picks"].get(c, 0)) for c in THREAD_IDS), f"{v:.1f}")
+                             for r, v in list(zip(frs, vals))[-10:][::-1]])]
+        return f"Memory materials: {sum(vals) / len(vals):.1f} FE per run over {len(frs)} run{'s' * (len(frs) != 1)}", "\n".join(lines)
+
+    rr = red_runs(runs)
+    done, _ = valid_runs(rr)
+    if not done:
+        return None, "No finished Red memories runs yet."
+    mem = sum(r["memories"] for r in done)
+    red = sum(r["red"] for r in done)
+    lines = [f"**Plan:** Red memories (Armament + Wonder) · **App:** v{version}", "",
+             f"- Runs: **{len(done)}** · Hero Memories: **{mem}** ({mem / len(done):.1f} per run) · "
+             f"Red: **{red}** ({red / len(done):.2f} per run)", ""]
+    rows = []
+    for d in whisper_stats(rr, settings, bootstrap=False):
+        f1 = lambda v: "—" if v is None else f"{v:.1f}"
+        eff = ("no effect on count" if d["key"] == "rarity" else
+               "—" if d["confidence"] == "Insufficient" else f"+{d['model']:.1f}")
+        rows.append((EFFECT_NAMES[d["key"]], f"{d['n_with']} / {d['n_without']}", f1(d["avg_with"]),
+                     f1(d["avg_without"]), eff, d["confidence"] or "—"))
+    if rows:
+        lines += ["**Whisper types compared** (Hero Memories per run)", "",
+                  _md_table(["Whisper type", "Runs with / w/o", "Avg with", "Avg w/o", "Estimated effect",
+                             "Confidence"], rows), ""]
+    combos = combo_stats(rr)
+    if combos:
+        lines += [f"**Combinations seen in {COMBO_MIN_RUNS}+ runs**", "",
+                  _md_table(["Whispers", "Runs", "Memories / run", "Red"],
+                            [(n, k, f"{a:.1f}", rd) for n, k, a, rd in combos[:8]]), ""]
+    lines += ["**Last runs**", "",
+              _md_table(["Date", "Whispers", "Memories", "Red"],
+                        [(r["t"][:10], _combo_name(r["effects"]), r["memories"], r["red"]) for r in done[-10:][::-1]])]
+    return f"Red memories: {mem / len(done):.1f} Hero Memories per run over {len(done)} run{'s' * (len(done) != 1)}", "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,45 @@
+title: "[Results] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share how your Void Sea runs went, so everyone can see which whisper combinations work best.
+        In the app: **Void Sea Terminal → Run history → Share results**. It copies a summary of your runs
+        (whisper types, counts and dates; nothing personal). Paste it below with Ctrl+V.
+  - type: dropdown
+    id: plan
+    attributes:
+      label: Plan
+      options:
+        - Red memories (Armament + Wonder)
+        - Memory materials (Wealth + Wonder)
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Paste the summary from "Share results" here.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots (optional)
+      description: Drag and drop screenshots of the app or the game here.
+  - type: input
+    id: filter
+    attributes:
+      label: Loot filter
+      description: Which Hero Memory qualities does your loot filter show? (matters for the Red memories plan)
+      placeholder: Epic and above
+  - type: input
+    id: map
+    attributes:
+      label: Map tier / level
+      placeholder: T8 / Profound / level 95
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes (optional)
+      description: What worked well, what didn't, anything that may matter.

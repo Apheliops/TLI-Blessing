@@ -196,6 +196,8 @@ Thanks to everyone who helped make this tool better:
 
 Found a bug or play in another language or resolution? [Open an issue](https://github.com/Apheliops/TLI-Blessing/issues/new/choose) — every report helps.
 
+**Share your results:** in the app, *Void Sea Terminal → Run history → Share results* copies a summary of your runs (whisper types, counts and dates; nothing personal). Post it in [Discussions → Show and tell](https://github.com/Apheliops/TLI-Blessing/discussions/categories/show-and-tell) so everyone can see which whisper combinations work best.
+
 ---
 
 ## License

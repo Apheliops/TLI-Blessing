@@ -63,6 +63,13 @@ EXACT_ZH = {
     "A run counts toward the averages when you leave the Void Sea map.": "离开虚海地图后，这一局才计入平均值。",
     "Pick the Memory materials plan and run the Void Sea; each run is added here automatically with the Scrap and "
     "Threads you pick up.": "选择追忆材料方案并进行虚海；每一局及拾取的碎絮和游丝会自动添加到这里。",
+    "Share results": "分享结果", "Copy and open GitHub": "复制并打开 GitHub", "Copy only": "仅复制", "Close": "关闭",
+    "Your run summary (whisper types, counts and dates; nothing personal) is copied. GitHub opens in your browser: "
+    "paste it with Ctrl+V into the Results box, add screenshots if you like, then press “Start discussion”. A GitHub "
+    "account is needed.": "你的局数摘要（秘语类型、数量和日期；不含个人信息）将被复制。浏览器会打开 GitHub：在 Results 框中按 "
+    "Ctrl+V 粘贴，可附上截图，然后点击 “Start discussion”。需要 GitHub 账号。",
+    "No finished Memory materials runs yet.": "还没有已完成的追忆材料方案对局。",
+    "No finished Red memories runs yet.": "还没有已完成的红色追忆方案对局。",
     "not tradeable": "不可交易", "Scrap / Thread (number not read)": "碎絮 / 游丝（数字未读出）",
     "Name this item": "命名此物品", "Name this item…": "命名此物品…", "Save": "保存",
     "This item is new and not in the item list yet. Type its English name as shown in game (hover it in your bag). "
