@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.7.2"
+APP_VERSION = "6.8"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -2342,7 +2342,34 @@ def run_gui(start_hidden=False):
     ov.attributes("-topmost", True)
     ov.attributes("-alpha", OV_ALPHA)
     ov.configure(bg=OBG, highlightthickness=1, highlightbackground=BORDER)
-    ov.geometry(data["settings"].get("overlay_geom", "300x230+60+220"))
+    # Panel içeriğinin yazıları (v6.8): adlandırılmış fontlar, boyut değişince yazılar yerinde büyür/küçülür.
+    # Kodda yazan puntolar v6.7'deki boyutlardır; üstüne ayardaki fark eklenir (varsayılan +2, Ctrl + tekerlek 0..8).
+    # Başlık, sekmeler ve alt çubuk (Read, Bug, LOG, Picture) sabit boyutta kalır.
+    OV_FONT_MIN, OV_FONT_MAX, OV_FONT_DEF = 0, 8, 2
+    ov_fonts = {}
+
+    def ov_delta():
+        try:
+            return min(OV_FONT_MAX, max(OV_FONT_MIN, int(data["settings"].get("overlay_font", OV_FONT_DEF))))
+        except (TypeError, ValueError):
+            return OV_FONT_DEF
+
+    def OF(size, weight="normal", family="Segoe UI"):
+        key = (family, size, weight)
+        if key not in ov_fonts:
+            ov_fonts[key] = tkfont.Font(root=root, family=family, size=size + ov_delta(), weight=weight)
+        return ov_fonts[key]
+
+    if "overlay_font" not in data["settings"]:
+        # v6.8'e ilk geçiş: yazılar 2 punto büyüdü, kayıtlı panel boyutu bir kez aynı oranda (~%20) büyütülür
+        try:
+            size, _, pos = data["settings"]["overlay_geom"].partition("+")
+            w, h = (int(x) for x in size.split("x"))
+            data["settings"]["overlay_geom"] = f"{round(w * 1.2)}x{round(h * 1.2)}+{pos}"
+        except (KeyError, ValueError):
+            pass
+        data["settings"]["overlay_font"] = OV_FONT_DEF
+    ov.geometry(data["settings"].get("overlay_geom", "360x280+60+220"))
     ov_imgs = []                               # PhotoImage referansları (silinmesin)
 
     # Başlık: sürükleyerek taşı
@@ -2382,7 +2409,7 @@ def run_gui(start_hidden=False):
             btn_min.config(text="+")
         else:
             layout_overlay()
-            ov.geometry(f"{ov.winfo_width()}x{ov_state['full_h'] or 230}")
+            ov.geometry(f"{ov.winfo_width()}x{ov_state['full_h'] or 280}")
             ov_state["collapsed"] = False
             btn_min.config(text="–")
 
@@ -2466,7 +2493,50 @@ def run_gui(start_hidden=False):
         if ov_body.winfo_reqheight() <= ov_canvas.winfo_height() + 2:
             ov_canvas.yview_moveto(0)
 
+    def ov_zoom(e):
+        """Ctrl + fare tekerleği: paneldeki yazılar büyür/küçülür (hemen, yeniden başlatmadan)."""
+        d = min(OV_FONT_MAX, max(OV_FONT_MIN, ov_delta() + (1 if e.delta > 0 else -1)))
+        close_menu()                        # açık plan menüsü eski boyutta kalmasın
+        if d != ov_delta():
+            r = (10 + d) / (10 + ov_delta())
+            data["settings"]["overlay_font"] = d
+            for (_fam, size, _w), f in ov_fonts.items():
+                f.configure(size=size + d)
+            # Panel de yazıyla aynı oranda büyür/küçülür: başlık, sekmeler ve alt çubuk sabit, sadece içerik alanı.
+            # Ters yön yok: panel elle küçültülürse yazı küçülmez.
+            ov.update_idletasks()
+            w, h = ov.winfo_width(), ov.winfo_height()
+            nw = min(ov.winfo_screenwidth(), max(200, round(w * r)))
+            if ov_state["collapsed"]:
+                if ov_state["full_h"]:
+                    ov_state["full_h"] = round(ov_state["full_h"] * r)
+                ov.geometry(f"{nw}x{h}")
+            else:
+                body = active_body().winfo_height()
+                ov.geometry(f"{nw}x{min(ov.winfo_screenheight(), max(110, round(h - body + body * r)))}")
+            ov.after(50, _ov_sync)
+            ov.after(50, _vs_sync)
+            if ov_state.get("zoom_save"):
+                ov.after_cancel(ov_state["zoom_save"])
+            ov_state["zoom_save"] = ov.after(800, save_ov_geom)   # boyut + ayar; tekerlek dönerken her adımda yazma
+        # Boyut kısa süre başlıkta görünür (alt çubukta yer az), sonra eski başlık döner
+        txt = tr(f"  Text size {100 + d * 10}%")
+        if "title_was" not in ov_state:
+            ov_state["title_was"] = (ov_title.cget("text"), ov_title.cget("fg"))
+        ov_title.config(text=txt, fg=PRI)
+        if ov_state.get("title_back"):
+            ov.after_cancel(ov_state["title_back"])
+
+        def back():
+            was = ov_state.pop("title_was", None)
+            if was and ov_title.cget("text") == txt:     # arada liste başlığı değiştiyse dokunma
+                ov_title.config(text=was[0], fg=was[1])
+        ov_state["title_back"] = ov.after(1500, back)
+        return "break"
+
     def _ov_wheel(e):
+        if e.state & 0x0004:                # Ctrl basılı
+            return ov_zoom(e)
         if ov_body.winfo_reqheight() > ov_canvas.winfo_height() + 2:
             ov_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
         return "break"
@@ -2477,6 +2547,7 @@ def run_gui(start_hidden=False):
             _bind_wheel(c)
 
     ov_body.bind("<Configure>", _ov_sync)
+    ov.bind("<Control-MouseWheel>", ov_zoom)       # başlık, sekmeler, alt çubuk üzerinde de çalışsın
     def _rewrap(body, width):
         """Panel boyutu değişince yazıların kırılma genişliğini yeni genişliğe uydur
         (yoksa açılışta dar sütuna kırılır, büyütünce sağdan taşar)."""
@@ -2495,9 +2566,9 @@ def run_gui(start_hidden=False):
         if w > 50:
             return w
         try:
-            return int(str(data["settings"].get("overlay_geom", "300x")).split("x")[0])
+            return int(str(data["settings"].get("overlay_geom", "360x")).split("x")[0])
         except ValueError:
-            return 300
+            return 360
 
     ov_canvas.bind("<Configure>", lambda e: (ov_canvas.itemconfig(ov_body_id, width=e.width),
                                              _rewrap(ov_body, e.width), _ov_sync(), ov.after(60, _ov_sync)))
@@ -2518,6 +2589,8 @@ def run_gui(start_hidden=False):
             vs_canvas.yview_moveto(0)
 
     def _vs_wheel(e):
+        if e.state & 0x0004:
+            return ov_zoom(e)
         if vs_body.winfo_reqheight() > vs_canvas.winfo_height() + 2:
             vs_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
         return "break"
@@ -2651,7 +2724,7 @@ def run_gui(start_hidden=False):
         else:
             lines = []
         for txt_, col in lines:
-            tk.Label(ov_body, text=tr(txt_), bg=OBG, fg=col, font=("Segoe UI", 8), anchor="w", justify="left",
+            tk.Label(ov_body, text=tr(txt_), bg=OBG, fg=col, font=OF(8), anchor="w", justify="left",
                      wraplength=max(120, _ov_width() - 40)).pack(fill="x")
         if goods:
             # en kârlı en üstte
@@ -2667,9 +2740,9 @@ def run_gui(start_hidden=False):
                 txt = tk.Frame(row, bg=OBG)
                 txt.pack(side="left", fill="x", expand=True)
                 tk.Label(txt, text=tr(f"#{o['slot']}  {item_name(o['cid'])} ×{o['qty']}"), bg=OBG, fg=FG,
-                         font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
+                         font=OF(10, "bold"), anchor="w").pack(fill="x")
                 tk.Label(txt, text=tr(f"{o['price']} DS   →   +{fmt(profit_of(o), 2)} FE profit"), bg=OBG, fg=GOOD,
-                         font=("Segoe UI", 9), anchor="w").pack(fill="x")
+                         font=OF(9), anchor="w").pack(fill="x")
         else:
             if st["offers"] is None:
                 msg = "Not read yet.\nOpen or refresh Blessings."
@@ -2677,7 +2750,7 @@ def run_gui(start_hidden=False):
                 msg = "No Divinity Stone price.\nSearch it once on the Exchange."
             else:
                 msg = "No profitable offers."
-            tk.Label(ov_body, text=tr(msg), bg=OBG, fg=MUTED, font=("Segoe UI", 10), justify="left",
+            tk.Label(ov_body, text=tr(msg), bg=OBG, fg=MUTED, font=OF(10), justify="left",
                      anchor="w").pack(fill="x", pady=6)
         _bind_wheel(ov_body)
         ov_canvas.yview_moveto(0)
@@ -3154,17 +3227,23 @@ def run_gui(start_hidden=False):
             except tk.TclError:
                 pass
 
-    def dark_menu(items, x, y, header=None, width=248, up=False, focus=True):
+    def dark_menu(items, x, y, header=None, width=248, up=False, focus=True, fs=0):
         """items: [(kind, metin, simge, komut)]; kind: "item" | "quit" | "sep" | "info".
         header: (başlık, sağdaki küçük yazı, alt satır) ya da None. up=True: menü imlecin üstüne açılır (tepsi).
-        focus=False: odağı almaz (overlay'deki menü: oyun ön planda kalsın, panel gizlenmesin)."""
+        focus=False: odağı almaz (overlay'deki menü: oyun ön planda kalsın, panel gizlenmesin).
+        fs: yazılara eklenecek punto (paneldeki menü panelin yazı boyutunu izler); ölçüler aynı oranda büyür."""
         close_menu()
         win = tk.Toplevel(root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
         win.configure(bg=MENU["border"])
         menu_state["win"] = win
-        ROW, SEP, PAD, HEAD = 36, 11, 14, (54 if header and header[2] else 40) if header else 0
+        k = (10 + fs) / 10
+
+        def Z(n):
+            return int(round(n * k))
+        width = Z(width)
+        ROW, SEP, PAD, HEAD = Z(36), Z(11), Z(14), Z(54 if header and header[2] else 40) if header else 0
         h = 8 + HEAD + sum(SEP if k == "sep" else ROW for k, *_ in items) + 6
         cv = tk.Canvas(win, width=width, height=h, highlightthickness=0, bd=0, bg=MENU["bg_top"])
         cv.pack(padx=1, pady=1)
@@ -3195,14 +3274,14 @@ def run_gui(start_hidden=False):
                 continue
             y0 = yy
             bg = cv.create_rectangle(6, y0 + 2, width - 6, y0 + ROW - 2, fill="", outline="")
-            bar = cv.create_rectangle(6, y0 + 9, 9, y0 + ROW - 9, fill="", outline="")
+            bar = cv.create_rectangle(6, y0 + Z(9), 9, y0 + ROW - Z(9), fill="", outline="")
             fg = MENU["off"] if kind == "info" else MENU["text"]
             ic = None
             if glyph and ICON_FONT:
-                ic = cv.create_text(PAD + 8, y0 + ROW // 2, text=glyph, fill=MENU["off"] if kind == "info" else MENU["icon"],
-                                    font=(ICON_FONT, 11))
-            tx = cv.create_text(PAD + (26 if ICON_FONT else 0), y0 + ROW // 2, text=tr(text), fill=fg,
-                                font=("Segoe UI", 10), anchor="w")
+                ic = cv.create_text(PAD + Z(8), y0 + ROW // 2, text=glyph, fill=MENU["off"] if kind == "info" else MENU["icon"],
+                                    font=(ICON_FONT, 11 + fs))
+            tx = cv.create_text(PAD + (Z(26) if ICON_FONT else 0), y0 + ROW // 2, text=tr(text), fill=fg,
+                                font=("Segoe UI", 10 + fs), anchor="w")
             if kind != "info":
                 rows.append((y0, y0 + ROW, kind, bg, bar, ic, tx, cmd))
             yy += ROW
@@ -4084,7 +4163,7 @@ def run_gui(start_hidden=False):
         tab_lbls["vs"].config(text=tr(f"Void Sea · {vs.count()}/6"))
 
         def line(text, fg, size=9, bold=False, cmd=None):
-            lb = tk.Label(vs_body, text=tr(text), bg=OBG, fg=fg, font=("Segoe UI", size, "bold" if bold else "normal"),
+            lb = tk.Label(vs_body, text=tr(text), bg=OBG, fg=fg, font=OF(size, "bold" if bold else "normal"),
                           anchor="w", justify="left", wraplength=wrap, cursor="hand2" if cmd else "")
             lb.pack(fill="x", pady=1)
             if cmd:
@@ -4120,10 +4199,10 @@ def run_gui(start_hidden=False):
         row = tk.Frame(vs_body, bg=OBG)
         row.pack(fill="x", pady=(0, 2))
         tk.Label(row, text=tr(f"Red (last run): {cur['red'] if cur else 0}"), bg=OBG, fg=BAD,
-                 font=("Segoe UI", 10, "bold")).pack(side="left")
+                 font=OF(10, "bold")).pack(side="left")
         for txt, d in (("+1", 1), ("−1", -1)):
             b = tk.Label(row, text=tr(f" {txt} "), bg="#3A1A1F" if d > 0 else SURF2, fg=FG,
-                         font=("Segoe UI", 9, "bold"), cursor="hand2", padx=4)
+                         font=OF(9, "bold"), cursor="hand2", padx=4)
             b.pack(side="left", padx=(6, 0))
             b.bind("<Button-1>", lambda e, d=d: vs_red(d))
         # toplanan Hero Memory: log'dan otomatik, sadece Void Sea haritasında toplananlar
@@ -4280,7 +4359,7 @@ def run_gui(start_hidden=False):
         row = tk.Frame(vs_body, bg=OBG)
         row.pack(fill="x", pady=(0, 3))
         key = "fe" if fe_plan() else "red"
-        chip = tk.Label(row, text=tr(f"◎ {VS_PLAN_NAME[key]}  ▾"), bg="#14243A", fg=PRI, font=("Segoe UI", 9, "bold"),
+        chip = tk.Label(row, text=tr(f"◎ {VS_PLAN_NAME[key]}  ▾"), bg="#14243A", fg=PRI, font=OF(9, "bold"),
                         padx=8, pady=2, cursor="hand2")
         chip.pack(side="left")
 
@@ -4289,7 +4368,8 @@ def run_gui(start_hidden=False):
             for k, sub in (("red", "Armament + Wonder"), ("fe", "Wealth + Wonder")):
                 items.append(("item", f"{VS_PLAN_NAME[k]} · {sub}", "\uE73E" if k == key else " ",
                               lambda k=k: show_plan(k)))
-            dark_menu(items, chip.winfo_rootx(), chip.winfo_rooty() + chip.winfo_height() + 2, width=270, focus=False)
+            dark_menu(items, chip.winfo_rootx(), chip.winfo_rooty() + chip.winfo_height() + 2, width=270, focus=False,
+                      fs=ov_delta())
         chip.bind("<Button-1>", choose)
 
     def _vs_decision(pos):
@@ -4323,7 +4403,7 @@ def run_gui(start_hidden=False):
         if not compact:
             line(m, BAD if m.startswith("⚠") else MUTED, 8)
         lk = tk.Label(vs_body, text=tr("Expand  ▾" if compact else "Show less  ▴"), bg=OBG, fg=PRI,
-                      font=("Segoe UI", 8, "bold"), anchor="w", cursor="hand2")
+                      font=OF(8, "bold"), anchor="w", cursor="hand2")
         lk.pack(fill="x", pady=(4, 0))
         lk.bind("<Button-1>", lambda e: _vs_toggle_expand())
         render_runs()

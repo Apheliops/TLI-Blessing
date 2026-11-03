@@ -78,7 +78,7 @@ The small transparent panel is visible **only while the game is in the foregroun
 | **Picture ●** | green = screen reading works, red = the last read failed or the reader is not installed |
 | ⚙ / – / ✕ | open the main window / collapse / quit |
 
-Drag the title bar to move it, drag the ◢ corner to resize it.
+Drag the title bar to move it, drag the ◢ corner to resize it. Hold **Ctrl** and turn the **mouse wheel** over the overlay to make the text of its list bigger or smaller; the overlay grows or shrinks with it (saved automatically; the title bar, tabs and bottom bar keep their size). Resizing the overlay by hand does not change the text size.
 
 ### DS Calculator
 
