@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.8.5"
+APP_VERSION = "6.8.6"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -4320,16 +4320,6 @@ def run_gui(start_hidden=False):
             th = " ".join(f"{p[c]}{VS.THREAD_SHORT[c]}" for c in VS.THREAD_IDS if p.get(c)) or "0"
             line(f"Last run: {p.get(VS.SCRAP_ID, 0)} Scrap · {th} Thread · {VS.run_fe(cur, prices):.1f} FE  · automatic",
                  FG, 9, True)
-        frs = VS.fe_runs(vs_log.runs)
-        if frs:
-            avg = sum(VS.run_fe(r, prices) for r in frs) / len(frs)
-            line(f"Log: {len(frs)} runs · {avg:.1f} FE per run (after tax)", MUTED, 8)
-        src = (("from your last run" if s["n_base"] == 1 else f"from your last {s['n_base']} runs") if s["n_base"]
-               else "default — learns from your runs")
-        line(f"Base per run: {s['base']['scrap']:.0f} Scrap, {s['base']['thread']:.1f} Thread ({src})", MUTED, 8)
-        mix = " / ".join(f"{VS.THREAD_SHORT[c]} {r * 100:.0f}%" for c, r in s["mix"].items())
-        line(f"Price after tax: Scrap {s['unit']['scrap']:.3f} FE · Thread {s['unit']['thread']:.3f} FE ({mix})",
-             MUTED, 8)
         if s["missing"]:
             line("⚠ No price for " + ", ".join(s["missing"]) + ": search it on the Exchange once.", ACC, 8)
         _vs_owned_warning(line)
@@ -4385,6 +4375,17 @@ def run_gui(start_hidden=False):
             line(learn, VS_WHY, 9)
         if s.get("fit"):                     # koşulardan öğrenilen etkiler (yazılı değerden farklıysa)
             line(VS.describe_fe_learned(s["fit"]), MUTED, 8)
+        # kayıt / taban / fiyat bilgisi en altta (öneri ve gerekçesi önce görünsün)
+        frs = VS.fe_runs(vs_log.runs)
+        if frs:
+            avg = sum(VS.run_fe(r, prices) for r in frs) / len(frs)
+            line(f"Log: {len(frs)} runs · {avg:.1f} FE per run (after tax)", MUTED, 8)
+        src = (("from your last run" if s["n_base"] == 1 else f"from your last {s['n_base']} runs") if s["n_base"]
+               else "default — learns from your runs")
+        line(f"Base per run: {s['base']['scrap']:.0f} Scrap, {s['base']['thread']:.1f} Thread ({src})", MUTED, 8)
+        mix = " / ".join(f"{VS.THREAD_SHORT[c]} {r * 100:.0f}%" for c, r in s["mix"].items())
+        line(f"Price after tax: Scrap {s['unit']['scrap']:.3f} FE · Thread {s['unit']['thread']:.3f} FE ({mix})",
+             MUTED, 8)
 
     VS_PLAN_NAME = {"red": "Red memories", "fe": "Memory materials"}
 
