@@ -954,7 +954,10 @@ def analyze(img):
     owned_n = owned_n2 if owned_n2 is not None else owned_n
     if owned_n is None and owned:
         owned_n = len(owned)
-    flame = any(FLAME_RX.search(t) or FLAME_RX.search(squash_cn(t)) for t, x, y in lines if x < img.width * 0.80)
+    main_lines = [t for t, x, y in lines if x < img.width * 0.80]
+    # 21:9 ekranda büyük başlık "Put" / "in Void Sea" / "Flames" diye ayrı satırlara bölünebiliyor: birleşik metne de bak
+    flame = (any(FLAME_RX.search(t) or FLAME_RX.search(squash_cn(t)) for t in main_lines)
+             or bool(FLAME_RX.search(" ".join(main_lines))))
     # Terminalin özet ekranı: "Need 2 more Seal Whisper(s) to open the Void Sea Terminal" — kart yok
     need = next((n for t, x, y in lines if (n := need_count(t)) is not None), None)
     if not flame and need is not None:

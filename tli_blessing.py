@@ -4102,7 +4102,8 @@ def run_gui(start_hidden=False):
             decision = ok and res["mode"] in ("flame", "cards")
             # eksik okuma (kartlar henüz belirmemiş olabilir): kendiliğinden 2 kez daha dene
             # (otomatik okumada sadece sayfa hâlâ açıksa)
-            if (not (ok and vs.complete()) and vs_st.get("retries", 0) < 2
+            # sağdaki "Seal Whispers Owned" paneli sayfadan sonra kayarak geliyor: okunamadıysa o da yeniden denenir
+            if ((not (ok and vs.complete()) or (decision and not vs.owned_seen)) and vs_st.get("retries", 0) < 2
                     and (not auto or vs_st.get("open_page"))):
                 vs_st["retries"] = vs_st.get("retries", 0) + 1
                 vs_st["msg"] = f"Reading… (incomplete, retry {vs_st['retries']}/2)"
