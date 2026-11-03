@@ -1948,11 +1948,13 @@ class VoidSeaState:
         self.tiers = {}      # alev ekranında alevlerin garanti en düşük kademesi {tür: kademe}
         self.owned_n = None  # paneldeki "n / 6" sayacı
         self.owned_seen = False  # son okumada sağdaki "Seal Whispers Owned" paneli okundu mu
+        self.manual = None   # elle tıklanan kart: (kartların imzası, sıra, picked'e eklenen kayıt)
 
     def reset(self):
         self.picked, self.cards, self.note, self.mode, self.selected = [], [], "", "cards", None
         self.owned_n = None
         self.owned_seen = False
+        self.manual = None
 
     def count(self):
         return self.owned_n if self.owned_n is not None else len(self.picked)
@@ -1983,10 +1985,32 @@ class VoidSeaState:
         s = model_settings(settings)
         return flame_advice([e for _, effs in self.picked for e in effs], s, self.tiers)
 
+    def _cards_sig(self):
+        return tuple(sig(c[1]) for c in self.cards)
+
+    def manual_index(self):
+        """Bu ekranda elle seçilen kartın sırası ya da None."""
+        m = self.manual
+        if m and m[0] == self._cards_sig() and any(p is m[2] for p in self.picked):
+            return m[1]
+        return None
+
     def take(self, i):
-        """Elle: i. kartı seçtim."""
-        if i < len(self.cards) and len(self.picked) < 6:
-            self.picked.append((self.cards[i][0], self.cards[i][1]))
+        """Elle: i. kartı seçtim. Ekran başına tek seçim: aynı karta yeniden tıklamak geri alır, başka karta
+        tıklamak seçimi değiştirir (önceden her tıklama yeni fısıltı ekliyordu: 2-3 tıkta 6/6, öneriler kayboluyordu)."""
+        if i >= len(self.cards):
+            return
+        prev = self.manual_index()
+        if prev is not None:
+            entry = self.manual[2]
+            self.picked = [p for p in self.picked if p is not entry]
+            self.manual = None
+            if prev == i:
+                return
+        if len(self.picked) < 6:
+            entry = (self.cards[i][0], self.cards[i][1])
+            self.picked.append(entry)
+            self.manual = (self._cards_sig(), i, entry)
 
     def on_scan(self, cards, owned, owned_n):
         """Yeni okuma. Kart yoksa False döner (ekran Void Sea Terminal değil)."""

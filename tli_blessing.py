@@ -2980,6 +2980,9 @@ def run_gui(start_hidden=False):
     VS_COL = {"arm": ACC, "won": PRI, "wea": GOOD, "boss": MUTED, "?": MUTED}
     VS_PICKED = "#c3a6ff"                    # seçilmiş fısıltılar: Armament/Wonder renklerinden ayrı, açık mor
     VS_WHY = "#ff9ad5"                       # önerinin gerekçesi: diğer renklerden ayrı, pembe
+    # kart satırının altındaki ipucu: elle seçim yokken / varken
+    VS_TAKE_HINT = {False: "(if your pick is not added automatically, click it)",
+                    True: "(✓ added by your click — click it again to undo)"}
     # Void Sea Seal alevleri oyundaki renkleriyle (v6.8.2): hangi satırın hangi alev olduğu bir bakışta belli
     VS_FLAME_HEX = {"blue": "#5cb8ff", "purple": "#d27cff", "yellow": "#ffc93c"}
 
@@ -4274,12 +4277,13 @@ def run_gui(start_hidden=False):
                 line("Almost equal", FG, 12, True)
             else:
                 line("No effect on red", MUTED, 11, True)
+            mi = vs.manual_index()
             for i in sorted(range(n), key=lambda i: -gains[i][0]):
                 side, effs, _x = vs.cards[i]
                 good = gains[i][0] > 0
-                line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs)}   {gains[i][1]:+.0f}%",
+                line(f"{'✓ ' if i == mi else ''}{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs)}   {gains[i][1]:+.0f}%",
                      GOOD if i == best else (FG if good else MUTED), 9, cmd=lambda i=i: vs_take(i))
-            line("(if your pick is not added automatically, click it)", MUTED, 7)
+            line(VS_TAKE_HINT[mi is not None], MUTED, 7)
         if vs.picked:
             line("Advice based on these picks: " + "; ".join(VS.describe(e) for _, e in vs.picked), VS_PICKED, 9)
         why = vs.reason(data["settings"], [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(vs.cards)])
@@ -4354,12 +4358,13 @@ def run_gui(start_hidden=False):
                 line("Almost equal", FG, 12, True)
             else:
                 line("No effect on FE", MUTED, 11, True)
+            mi = vs.manual_index()
             for i in sorted(range(n), key=lambda i: -gains[i][0]):
                 side, effs, _x = vs.cards[i]
                 good = gains[i][0] > 0
-                line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}   {gains[i][0]:+.1f} FE",
+                line(f"{'✓ ' if i == mi else ''}{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}   {gains[i][0]:+.1f} FE",
                      GOOD if i == best else (FG if good else MUTED), 9, cmd=lambda i=i: vs_take(i))
-            line("(if your pick is not added automatically, click it)", MUTED, 7)
+            line(VS_TAKE_HINT[mi is not None], MUTED, 7)
         if vs.picked:
             line("Advice based on these picks: " + "; ".join(VS.describe(e, fe=True) for _, e in vs.picked), VS_PICKED, 9)
         why = vs.fe_reason(s, [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(vs.cards)])
