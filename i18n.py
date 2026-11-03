@@ -139,9 +139,8 @@ EXACT_ZH = {
     "Advice appears here when the selection screen opens.": "打开选择界面时会在这里显示建议。",
     "Flames are almost equal": "两种夜火几乎相同", "No effect on red": "不影响红色",
     "Almost equal": "几乎相同",
-    "(if your pick is not added automatically, click it)": "（如果你的选择没有自动加入，请点击它）",
-    "(✓ added by your click — click it again to undo)": "（✓ 已按你的点击加入——再次点击可撤销）",
-    "Could not tell which card was picked: click the card to add it": "无法判断选了哪张卡：请点击该卡加入",
+    "Could not tell which card was picked: open the Seal Whispers Owned panel and press “Read”":
+        "无法判断选了哪张卡：请打开右侧已拥有的封印秘语面板并点击“读取”",
     # Void Sea sekmesi (ana pencere)
     "Runs logged": "已记录次数", "Hero Memories": "英雄追忆", "Red memories": "红色追忆", "Last run": "上一次",
     "tracked by the app": "由程序记录", "no runs yet": "暂无记录", "—": "—",
