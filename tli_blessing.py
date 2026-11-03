@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.8.4"
+APP_VERSION = "6.8.5"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -4327,14 +4327,14 @@ def run_gui(start_hidden=False):
         src = (("from your last run" if s["n_base"] == 1 else f"from your last {s['n_base']} runs") if s["n_base"]
                else "default — learns from your runs")
         line(f"Base per run: {s['base']['scrap']:.0f} Scrap, {s['base']['thread']:.1f} Thread ({src})", MUTED, 8)
-        if s.get("fit"):                     # koşulardan öğrenilen etkiler (yazılı değerden farklıysa)
-            line(VS.describe_fe_learned(s["fit"]), MUTED, 8)
         mix = " / ".join(f"{VS.THREAD_SHORT[c]} {r * 100:.0f}%" for c, r in s["mix"].items())
         line(f"Price after tax: Scrap {s['unit']['scrap']:.3f} FE · Thread {s['unit']['thread']:.3f} FE ({mix})",
              MUTED, 8)
         if s["missing"]:
             line("⚠ No price for " + ", ".join(s["missing"]) + ": search it on the Exchange once.", ACC, 8)
         _vs_owned_warning(line)
+        labels = [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(vs.cards)]
+        learn = ""
 
         if len(vs.picked) >= 6:
             line("Terminal is full (6/6).", MUTED, 10)
@@ -4374,11 +4374,17 @@ def run_gui(start_hidden=False):
                 good = gains[i][0] > 0
                 line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}   {gains[i][0]:+.1f} FE",
                      GOOD if i == best else (FG if good else MUTED), 9)
+            if len(vs.picked) < 6:           # az görülen tür: seçilirse öğrenmeye yardım eder
+                learn = VS.fe_learn_note(vs.cards, best, labels, *VS.fe_learn_counts(vs_log.runs))
         if vs.picked:
             line("Advice based on these picks: " + "; ".join(VS.describe(e, fe=True) for _, e in vs.picked), VS_PICKED, 9)
-        why = vs.fe_reason(s, [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(vs.cards)])
+        why = vs.fe_reason(s, labels)
         if why:
             line(why, VS_WHY, 9)
+        if learn:
+            line(learn, VS_WHY, 9)
+        if s.get("fit"):                     # koşulardan öğrenilen etkiler (yazılı değerden farklıysa)
+            line(VS.describe_fe_learned(s["fit"]), MUTED, 8)
 
     VS_PLAN_NAME = {"red": "Red memories", "fe": "Memory materials"}
 

@@ -256,6 +256,11 @@ TEMPLATES_ZH = {
     "Why: {a} raises the memory count (avg. {m0}→{m1}); {b} raises the red rate with Rarity (avg. {p0}%→{p1}%) but 2 of its 5 kinds (Scrap/Thread ×2) do nothing for red.":
         "原因：{a}提高追忆数量（平均 {m0}→{m1}）；{b}用稀有度提高红色概率（平均 {p0}%→{p1}%），但它 5 种中有 2 种（碎絮/游丝 ×2）对红色没有作用。",
     "Their averages are almost the same.": "两者的平均值几乎相同。",
+    "Learning: few runs so far with {x}. Picking {a} also helps the app learn.":
+        "学习：{x} 的记录还很少。选择{a}也能帮助程序学习。",
+    "Learning: few runs so far with {x}. Picking {a} helps the app learn, even if it shows less FE now.":
+        "学习：{x} 的记录还很少。即使现在显示的 FE 较少，选择{a}也能帮助程序学习。",
+    "{e} ({a} of {b} runs)": "{e}（{b} 次中 {a} 次）", "{e} (not seen yet)": "{e}（还没出现过）",
     "The gains are almost equal; picked the higher-quality {s} flame.": "收益几乎相同；选择了品质更高的{s}夜火。",
     # Void Sea sekmesi (ana pencere)
     "Run {n}  ·  {t}": "第 {n} 次  ·  {t}", "{m} memories  ·  {r} red": "{m} 追忆  ·  {r} 红色",

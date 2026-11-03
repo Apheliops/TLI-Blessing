@@ -1503,6 +1503,40 @@ def fe_reason_cards(picked, cards, best, gains, labels, s):
     return txt
 
 
+FE_LEARN_MIN = 5   # bir fısıltı türü bundan az Memory materials koşusunda görüldüyse "az gördüm" notu çıkar
+
+
+def fe_learn_counts(runs):
+    """-> ({tür: o türün görüldüğü koşu sayısı}, fısıltılı Memory materials koşu sayısı)"""
+    done = [r for r in fe_runs(runs) if run_whispers(r["effects"])]
+    cnt = {}
+    for r in done:
+        for k in {k for k, *_ in run_whispers(r["effects"])}:
+            cnt[k] = cnt.get(k, 0) + 1
+    return cnt, len(done)
+
+
+def fe_learn_note(cards, best, labels, counts, n):
+    """Az görülen (Scrap / Thread'e etkisi olan) türü taşıyan kartlar için not: seçilirse model daha iyi öğrenir.
+    Önerilmeyen bir kart az görülen türü taşıyorsa daha az FE gösterse de onu seçmek öğrenmeye yardım eder."""
+    rare = {}                                   # kart sırası -> az görülen türleri
+    for i, (_side, effs, *_x) in enumerate(cards):
+        ks = list(dict.fromkeys(k for k, *_ in effs if k in FE_KEYS and counts.get(k, 0) < FE_LEARN_MIN))
+        if ks:
+            rare[i] = ks
+    if not rare:
+        return ""
+    others = [i for i in rare if i != best]    # önerilmeyen kartlar öncelikli (asıl yardım onlarda)
+    kinds = list(dict.fromkeys(k for i in (others or list(rare)) for k in rare[i]))
+    seen = ", ".join(f"{EFFECT_NAMES.get(k, k)} ({counts.get(k, 0)} of {n} runs)" if counts.get(k, 0)
+                     else f"{EFFECT_NAMES.get(k, k)} (not seen yet)" for k in kinds)
+    if not others:
+        return f"Learning: few runs so far with {seen}. Picking {labels[best]} also helps the app learn."
+    others = [labels[i] for i in others]
+    return (f"Learning: few runs so far with {seen}. Picking {' or '.join(others)} helps the app learn, "
+            "even if it shows less FE now.")
+
+
 def fe_reason_flame(picked, out, best, tiers=None):
     if best is None:
         return "Why: neither flame adds FE."
