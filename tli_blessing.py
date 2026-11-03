@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.8.3"
+APP_VERSION = "6.8.4"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -1569,6 +1569,23 @@ def run_gui(start_hidden=False):
     run_detail = tk.Frame(fr_runs, bg=SURF2, width=232, highlightthickness=1, highlightbackground=BORDER)
     run_detail.pack(side="right", fill="y", padx=(10, 0))
     run_detail.pack_propagate(False)
+    # 6 fısıltı + not kartın boyunu aşabiliyor: içerik fare tekerleğiyle kaydırılan bir alanda
+    rd_canvas = tk.Canvas(run_detail, bg=SURF2, highlightthickness=0, bd=0, yscrollincrement=20)
+    rd_canvas.pack(fill="both", expand=True)
+    rd_body = tk.Frame(rd_canvas, bg=SURF2)
+    rd_body_id = rd_canvas.create_window(0, 0, window=rd_body, anchor="nw")
+    rd_body.bind("<Configure>", lambda e: rd_canvas.configure(scrollregion=(0, 0, e.width, e.height)))
+    rd_canvas.bind("<Configure>", lambda e: rd_canvas.itemconfig(rd_body_id, width=e.width))
+
+    def _rd_wheel(e):
+        if rd_body.winfo_reqheight() > rd_canvas.winfo_height() + 2:
+            rd_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        return "break"
+
+    def _rd_bind_wheel(w):
+        w.bind("<MouseWheel>", _rd_wheel)
+        for c in w.winfo_children():
+            _rd_bind_wheel(c)
     tvr = ttk.Treeview(fr_runs, columns=("t", "wh", "mem", "red"), show="headings", height=6)
     for c, t, w, a, s in [("t", "Date", 104, "w", False), ("wh", "Whispers", 190, "w", True),
                           ("mem", "Memories", 76, "e", False), ("red", "Red", 44, "e", False)]:
@@ -2997,24 +3014,27 @@ def run_gui(start_hidden=False):
 
     def detail_card(title, summary, sum_col, rows=(), note=""):
         """Sağdaki detay kartı: başlık (büyük) / özet satırı (vurgulu) / etiket–değer satırları / not."""
-        for w in run_detail.winfo_children():
+        for w in rd_body.winfo_children():
             w.destroy()
-        tk.Label(run_detail, text=tr(title), bg=SURF2, fg="#FFFFFF", font=(F_UI, 11, "bold"), anchor="w",
+        rd_canvas.yview_moveto(0)
+        tk.Label(rd_body, text=tr(title), bg=SURF2, fg="#FFFFFF", font=(F_UI, 11, "bold"), anchor="w",
                  justify="left", wraplength=206).pack(fill="x", padx=12, pady=(12, 0))
         if summary:
-            tk.Label(run_detail, text=tr(summary), bg=SURF2, fg=sum_col, font=(F_UI + " Semibold", 10), anchor="w",
+            tk.Label(rd_body, text=tr(summary), bg=SURF2, fg=sum_col, font=(F_UI + " Semibold", 10), anchor="w",
                      justify="left", wraplength=206).pack(fill="x", padx=12, pady=(2, 0))
         if rows:
-            tk.Frame(run_detail, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(10, 8))
-            tk.Label(run_detail, text=tr("Whispers"), bg=SURF2, fg=MUTED, font=(F_UI, 8), anchor="w").pack(fill="x", padx=12)
+            tk.Frame(rd_body, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(10, 8))
+            tk.Label(rd_body, text=tr("Whispers"), bg=SURF2, fg=MUTED, font=(F_UI, 8), anchor="w").pack(fill="x", padx=12)
         for label, value in rows:
-            row = tk.Frame(run_detail, bg="#1F2A3E")
+            row = tk.Frame(rd_body, bg="#1F2A3E")
             row.pack(fill="x", padx=12, pady=(3, 0))
             tk.Label(row, text=tr(label), bg="#1F2A3E", fg=MUTED, font=(F_UI, 9), anchor="w").pack(side="left", padx=8, pady=4)
             tk.Label(row, text=tr(value), bg="#1F2A3E", fg=FG, font=(F_UI + " Semibold", 10), anchor="e").pack(side="right", padx=8)
         if note:
-            tk.Label(run_detail, text=tr(note), bg=SURF2, fg=MUTED, font=(F_UI, 8), anchor="w", justify="left",
+            tk.Label(rd_body, text=tr(note), bg=SURF2, fg=MUTED, font=(F_UI, 8), anchor="w", justify="left",
                      wraplength=206).pack(fill="x", padx=12, pady=(10, 0))
+        tk.Frame(rd_body, bg=SURF2, height=10).pack(fill="x")    # son satır kartın kenarına yapışmasın
+        _rd_bind_wheel(rd_canvas)
 
     def select_run(i, switch=True):
         """Grafik, Run history tablosu ve detay kartı için tek seçim: koşu kimliği = kayıttaki sırası
