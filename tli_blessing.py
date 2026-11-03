@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.8.1"
+APP_VERSION = "6.8.2"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -2974,6 +2974,13 @@ def run_gui(start_hidden=False):
     VS_COL = {"arm": ACC, "won": PRI, "wea": GOOD, "boss": MUTED, "?": MUTED}
     VS_PICKED = "#c3a6ff"                    # seçilmiş fısıltılar: Armament/Wonder renklerinden ayrı, açık mor
     VS_WHY = "#ff9ad5"                       # önerinin gerekçesi: diğer renklerden ayrı, pembe
+    # Void Sea Seal alevleri oyundaki renkleriyle (v6.8.2): hangi satırın hangi alev olduğu bir bakışta belli
+    VS_FLAME_HEX = {"blue": "#5cb8ff", "purple": "#d27cff", "yellow": "#ffc93c"}
+
+    def vs_flame_col(side, default):
+        """Alevin rengi (okunduysa), yoksa default."""
+        t = (vs.tiers or {}).get(side)
+        return VS_FLAME_HEX[VS.TIER_COLOR[t]] if t is not None else default
 
     def _whisper_short(effs):
         """Tablo için kısa özet: sadece türler ve kaç tane ("Mem qty ×2 · Rarity · Lucky"); değerler detay panelinde."""
@@ -4238,14 +4245,14 @@ def run_gui(start_hidden=False):
             # Void Sea Seal: hangi alev konmalı? Seçilmiş fısıltılara göre Rare+ fısıltının ortalama katkısı.
             fbest, out = vs.flame(data["settings"])
             if fbest in ("arm", "won"):
-                line(f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", VS_COL[fbest], 12, True)
+                line(f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", vs_flame_col(fbest, VS_COL[fbest]), 12, True)
             elif fbest == "tie":
                 line("Flames are almost equal", FG, 12, True)
             else:
                 line("No effect on red", MUTED, 11, True)
             for side in sorted(out, key=lambda s: -out[s][0]):
                 line(f"{VS.flame_label(side, vs.tiers)} flame: average {out[side][1]:+.0f}% red",
-                     GOOD if side == fbest else FG, 9)
+                     vs_flame_col(side, GOOD if side == fbest else FG), 9, side == fbest)
             if vs.selected in ("arm", "won"):
                 ok = fbest not in ("arm", "won") or vs.selected == fbest
                 line(f"Currently selected: {VS.SIDE_LABEL[vs.selected]}" + ("" if ok else "  → change it"),
@@ -4315,14 +4322,14 @@ def run_gui(start_hidden=False):
         elif vs.mode == "flame":
             fbest, out = vs.fe_flame(s)
             if fbest in out:
-                line(f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", VS_COL[fbest], 12, True)
+                line(f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", vs_flame_col(fbest, VS_COL[fbest]), 12, True)
             elif fbest == "tie":
                 line("Flames are almost equal", FG, 12, True)
             else:
                 line("No effect on FE", MUTED, 11, True)
             for side in sorted(out, key=lambda x: -out[x][0]):
                 line(f"{VS.flame_label(side, vs.tiers)} flame: average {out[side][0]:+.1f} FE ({out[side][1]:+.0f}%)",
-                     GOOD if side == fbest else FG, 9)
+                     vs_flame_col(side, GOOD if side == fbest else FG), 9, side == fbest)
             if vs.selected in out:
                 ok = fbest not in out or vs.selected == fbest
                 line(f"Currently selected: {VS.SIDE_LABEL[vs.selected]}" + ("" if ok else "  → change it"),
@@ -4383,7 +4390,7 @@ def run_gui(start_hidden=False):
         if vs.mode == "flame":
             fbest, out = vs.fe_flame(s) if fe else vs.flame(data["settings"])
             if fbest in out:
-                return f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", VS_COL[fbest]
+                return f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", vs_flame_col(fbest, VS_COL[fbest])
             return ("Flames are almost equal", FG) if fbest == "tie" else ("No flame helps", MUTED)
         if not vs.cards:
             return "Open the Void Sea Terminal", MUTED
