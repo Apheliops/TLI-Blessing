@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.8.2"
+APP_VERSION = "6.8.3"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -1182,6 +1182,12 @@ def run_gui(start_hidden=False):
         try:
             import ctypes
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            pass
+        try:   # bildirimlerde "Python" değil uygulamanın adı (pencereler açılmadan önce)
+            import tray as TR
+            TR.set_app_id()
+            TR.register_app_id()
         except Exception:
             pass
     q = queue.Queue()
@@ -4680,6 +4686,13 @@ def run_gui(start_hidden=False):
                 st["menu_icon"] = ImageTk.PhotoImage(icon_img.resize((16, 16)), master=root)   # tepsi menüsünün başlığı
             except Exception:
                 pass
+            if sys.platform == "win32":   # bildirim başlığındaki simge
+                try:
+                    p = user_file("app_icon.png")
+                    icon_img.resize((64, 64)).save(p)
+                    TR.register_app_id(os.path.abspath(p))
+                except Exception:
+                    pass
             tray_obj["t"] = TR.Tray(icon_img, lambda a: q.put(("tray", a)), APP_VERSION)
     except Exception:
         pass

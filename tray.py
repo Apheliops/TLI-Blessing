@@ -166,6 +166,31 @@ def app_icon(log_path):
         return None
 
 
+APP_ID = "Apheliops.TLIBlessingHelper"
+
+
+def set_app_id():
+    """Windows: sürecin kendi kimliği. Yoksa bildirimlerin başlığında "Python" yazıyor (pythonw.exe)."""
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:
+        pass
+
+
+def register_app_id(icon_path=""):
+    """Bildirim başlığındaki ad ve simge: HKCU\\Software\\Classes\\AppUserModelId\\<APP_ID>
+    (kullanıcıya özel, yönetici izni gerekmez)."""
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Software\\Classes\\AppUserModelId\\" + APP_ID) as k:
+            winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, "TLI Blessing Helper")
+            if icon_path:
+                winreg.SetValueEx(k, "IconUri", 0, winreg.REG_SZ, icon_path)
+    except Exception:
+        pass
+
+
 class Tray:
     """pystray ile sistem tepsisi simgesi. on_open/on_quit başka thread'den çağrılır."""
 
