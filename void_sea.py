@@ -643,6 +643,91 @@ def _fill_numbers(text, nums):
     return text
 
 
+def _tier_values():
+    """Her etkinin olabilecek değerleri: alev havuzlarındaki Normal / Magic / Rare / Epic kademeleri (tlidb)."""
+    out = {}
+    for pool in (FLAME_POOL, FE_FLAME_POOL):
+        for side in pool.values():
+            for k, vals in side:
+                if k != "none":
+                    out.setdefault(k, set()).update(round(v, 1) for v in vals)
+    return out
+
+
+def tier_ok(effs):
+    """Okunan etkilerin hepsi bilinen bir kademe değerinde mi? (havuzda olmayan tür: kontrol edilemez, geçer)"""
+    tiers = _tier_values()
+    return bool(effs) and all(k != "none" and (k not in tiers or round(v, 1) in tiers[k]) for k, v, *_ in effs)
+
+
+def _tier_fix(text, nums):
+    """Kart değeri kademelere uymadı (rakam düşmüş, "+" "1" okunmuş, sayılar yer değiştirmiş): okunan sayılarla
+    (baştaki "1"i atılmış hâlleri de) eksik yerler denenir; kademe değerlerine uyan tek bir sonuç varsa o.
+    Birden çok farklı sonuç çıkarsa tahmin edilmez (None)."""
+    import itertools
+    cands = []
+    for n in nums:
+        for c in (n, n[1:] if len(n) > 1 and n[0] == "1" else None):
+            if c and c not in cands:
+                cands.append(c)
+    texts = [text]
+    # metindeki "142 %" gibi bir sayının baştaki "1"i atılmış hâli
+    for m in re.finditer(r"(?<![\d.])1(\d+)", text):
+        texts.append(text[:m.start()] + m.group(1) + text[m.end():])
+    # "%" hiç okunmadıysa ("28" + "chance for Hero Memories…"): başa "%" koyup sayıyı onun önüne yerleştir
+    if not re.search(r"%|o/o", text):
+        texts += ["% " + re.sub(r"^\W*\d+(?:[.,]\d+)?\s*", "", t) for t in texts]
+    found = {}
+    for t in texts:
+        for r in range(3):
+            for pool in itertools.permutations(cands, r):
+                got = parse_effects(_fill_numbers(t, list(pool)))
+                if tier_ok(got):
+                    found.setdefault(tuple((k, round(v, 1)) for k, v, *_ in got), got)
+    return next(iter(found.values())) if len(found) == 1 else None
+
+
+def card_tier(img, cx, ui=1.0):
+    """Kartın kalitesi başlığının renginden: 0 Normal (renksiz / gri), 1 Magic (mavi), 2 Rare (mor), 3 Epic
+    (turuncu); belli değilse None. Kayıtlı ekranlarda okunan değerin kademesiyle 34 / 34 eşleşti."""
+    import colorsys
+    import numpy as np
+    H = img.height
+    box = (int(cx - 0.11 * ui * H), int((0.5 + 0.075 * ui) * H), int(cx + 0.11 * ui * H), int((0.5 + 0.105 * ui) * H))
+    a = np.asarray(img.crop(box)).astype(float) / 255
+    mx, mn = a.max(axis=2), a.min(axis=2)
+    sel = (mx > 0.55) & ((mx - mn) / np.maximum(mx, 1e-6) > 0.25)
+    if sel.sum() < 0.02 * sel.size:
+        return 0
+    hue = colorsys.rgb_to_hsv(*(a[..., i][sel].mean() for i in range(3)))[0] * 360
+    if 195 <= hue <= 245:
+        return 1
+    if 265 <= hue <= 315:
+        return 2
+    if 25 <= hue <= 60:
+        return 3
+    return None
+
+
+def _tier_fill(text, tier):
+    """Sayısı okunamayan kart: türü metinden, kalitesi renkten (card_tier) belli; değer o kademenin tlidb değeri.
+    Metne uyan tek bir etki çıkarsa o, yoksa None."""
+    found = {}
+    for pool in (FLAME_POOL, FE_FLAME_POOL):
+        for side in pool.values():
+            for k, vals in side:
+                if k == "none":
+                    continue
+                v = vals[tier]
+                for n in [v] + ([v / 0.2] if k.startswith("luck") else []):
+                    n = f"{n:g}"
+                    for nums in ([n], ["20", n]):
+                        got = parse_effects(_fill_numbers(text, nums))
+                        if got and all(kk == k and round(vv, 1) == round(v, 1) for kk, vv, *_ in got):
+                            found.setdefault((k, round(v, 1)), got)
+    return next(iter(found.values())) if len(found) == 1 else None
+
+
 def _cn_numbers(text, whites, more_whites):
     """Çince kart: kalın beyaz rakamlar renkli okumada kısmen düşüyor ("20%" -> "0%", "17 枚" -> "7 枚").
     Ayrıca okunan beyaz rakamlarla tamamla: kısmi rakam, sonu ona uyan beyaz sayıyla değişir; rakamsız
@@ -693,7 +778,59 @@ def _white_numbers(crop, np, Image, thr=200, f=1.0):
     siyah-beyaz maske yapıp beyaz alanın etrafından sıkı kırparak okur. Küçük rakam büyük boş
     alanda kalınca OCR kararsız olduğu için birkaç büyütme oranı sırayla denenir."""
     a = np.asarray(crop).astype(int)
-    wm = a.min(axis=2) > thr
+    return _mask_numbers(a.min(axis=2) > thr, np, Image, f)
+
+
+def _white_more(crop, np, Image, f=1.0, thr=200):
+    """Beyaz rakamlar için ek adaylar (okunan değer kademe değerlerine uymadığında): başındaki "+" silinmiş
+    maske bütün olarak ve satır satır (Wonder: üstte "+42", altta "2 time(s)"; OCR "+42"yi "142" okuyabiliyor,
+    iki satır birlikteyken hiç okumayabiliyor)."""
+    wm = np.asarray(crop).astype(int).min(axis=2) > thr
+    if not wm.any():
+        return []
+    bands = _mask_bands(wm, np)
+    for y0, y1 in bands:
+        _drop_plus(wm, y0, y1, np)
+    nums = _mask_numbers(wm, np, Image, f)
+    if len(bands) > 1:
+        for y0, y1 in bands:
+            band = np.zeros_like(wm)
+            band[y0:y1 + 1] = wm[y0:y1 + 1]
+            nums += _mask_numbers(band, np, Image, f)
+    return nums
+
+
+def _mask_bands(wm, np):
+    """Maskedeki yazı satırları: [(üst, alt)] (aralarında boş satır olan parçalar; kırıntılar atılır)."""
+    rows = np.nonzero(wm.any(axis=1))[0]
+    bands, start = [], rows[0]
+    for p, q in zip(rows, rows[1:]):
+        if q - p > 2:
+            bands.append((start, p))
+            start = q
+    bands.append((start, rows[-1]))
+    tall = max(y1 - y0 for y0, y1 in bands)
+    return [(y0, y1) for y0, y1 in bands if y1 - y0 >= 0.4 * tall]
+
+
+def _drop_plus(wm, y0, y1, np):
+    """Satırın başındaki "+" işaretini siler: OCR onu "1" okuyabiliyor ("+42" -> "142").
+    "+" rakamlardan kısa, satırın ortasında duran, kabaca kare bir işaret."""
+    cols = np.nonzero(wm[y0:y1 + 1].any(axis=0))[0]
+    if len(cols) < 2:
+        return
+    x0 = x1 = cols[0]
+    for c in cols[1:]:
+        if c - x1 > 1:
+            break
+        x1 = c
+    g = np.nonzero(wm[y0:y1 + 1, x0:x1 + 1].any(axis=1))[0]
+    h, w, band_h = g[-1] - g[0] + 1, x1 - x0 + 1, y1 - y0 + 1
+    if h < 0.8 * band_h and g[0] > 0 and g[-1] < band_h - 1 and 0.7 <= w / h <= 1.4:
+        wm[y0:y1 + 1, x0:x1 + 1] = False
+
+
+def _mask_numbers(wm, np, Image, f):
     ys, xs = np.nonzero(wm)
     if len(xs) == 0:
         return []
@@ -742,7 +879,9 @@ def read_cards_color(img, lines):
             if all(k == "none" for k, *_ in es):
                 return 1
             weak = any(k in ("luck", "luckS", "luckT") and not re.search(r"\d\s*%", src) for k, _v, src in es)
-            return 2 if weak else 3
+            # 4: değerler tlidb kademe değerlerinden biri (yanlış okunmuş sayı kademeye uymaz)
+            return 2 if weak else 4 if tier_ok(es) else 3
+        more = []
         for s in (2 * f, 3 * f):
             col = [t for t, *_ in _reading_order(_ocr_any(crop.resize((int(crop.width * s), int(crop.height * s)))))]
             head = next((t for t in col if (re.search(r"of", t, re.I) or "秘语" in squash_cn(t))
@@ -755,18 +894,39 @@ def read_cards_color(img, lines):
                                                 lambda thr: _white_numbers(crop, np, Image, thr=thr, f=f)))
                 if quality(got) > quality(effs):
                     effs = got
-                if quality(effs) == 3:
+                if quality(effs) == 4:
                     break
                 continue
-            standalone = [NUM_LINE_RX.match(t).group(1) for t in body if NUM_LINE_RX.match(t)]
-            text = " ".join(t for t in body if not NUM_LINE_RX.match(t))
+            # tek başına satırdaki sayılar eksik yerlere dağıtılır; "multiplied by"dan hemen sonraki ("2" time(s))
+            # ise kat sayısıdır, yerinde kalır (yoksa "%"in yerine geçip 42 yerine 2 okunuyordu)
+            standalone, parts = [], []
+            for t in body:
+                m = NUM_LINE_RX.match(t)
+                if m and not (parts and re.search(r"multiplied\s*by\s*$", parts[-1], re.I)):
+                    standalone.append(m.group(1))
+                else:
+                    parts.append(t)
+            text = " ".join(parts)
             present = re.findall(r"\d+(?:[.,]\d+)?", text)
             pool = standalone + [n for n in white_nums if n not in standalone and n not in present]
             got = parse_effects(_fill_numbers(text, pool))
+            if not tier_ok(got):
+                if not more:
+                    more = _white_more(crop, np, Image, f=f) or ["-"]
+                fixed = _tier_fix(text, standalone + white_nums + present + [n for n in more if n != "-"])
+                if fixed:
+                    got = fixed
             if quality(got) > quality(effs):
                 effs = got
-            if quality(effs) == 3:
+            if quality(effs) == 4:
                 break
+        # hiç sayı okunamadıysa (sadece "Memory Scrap / Thread" ya da hiçbir şey): kalite kartın renginden,
+        # değer o kademenin tlidb değeri
+        if text and quality(effs) <= 1:
+            tier = card_tier(img, cx, ui)
+            got = _tier_fill(text, tier) if tier is not None else None
+            if got:
+                effs = got
         side = _side_of_heading(head)
         if side is None and effs:
             k = effs[0][0]
@@ -1812,7 +1972,9 @@ class VoidSeaState:
         (kartlar açılış animasyonundayken okunursa bazıları boş kalır)."""
         if self.mode in ("flame", "overview"):
             return True
-        return len(self.cards) >= 3 and all(effs for _, effs, _ in self.cards)
+        # sadece "Memory Scrap / Thread" okunduysa (sayı düşmüş, Boss kartı hariç) kart okunmamış sayılır
+        return len(self.cards) >= 3 and all(effs and (side == "boss" or any(k != "none" for k, *_ in effs))
+                                            for side, effs, _ in self.cards)
 
     def flame(self, settings):
         s = model_settings(settings)
