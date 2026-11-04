@@ -200,6 +200,12 @@ Found a bug or play in another language or resolution? [Open an issue](https://g
 
 ---
 
+## Support
+
+TLI Blessing Helper is free and will stay free, with every feature for everyone. If it saves you Divinity Stones or gets you more red memories and you'd like to say thanks, you can [sponsor me on GitHub](https://github.com/sponsors/Apheliops). It's completely optional. Bug reports, screenshots and shared run results help just as much.
+
+---
+
 ## License
 
 Copyright © 2026 Apheliops
