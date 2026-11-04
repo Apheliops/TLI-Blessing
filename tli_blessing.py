@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.8.6"
+APP_VERSION = "6.8.7"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -4168,8 +4168,9 @@ def run_gui(start_hidden=False):
             vs_st["msg"] = f"⚠ OCR error: {val}"
             report_error("Void Sea", "OCR error", [str(val)])
         elif ev == "entered":
+            offers = vs.offers               # Terminal'de görülen kartlar: reset silmeden önce al
             vs.reset()
-            vs_log.start(val)
+            vs_log.start(val, offers)
             vs_st["msg"] = "Entered the Terminal: " + VS.describe(val)
         elif ev == "level":
             vs_log.on_level()

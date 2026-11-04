@@ -1982,11 +1982,33 @@ class VoidSeaState:
         self.tiers = {}      # alev ekranında alevlerin garanti en düşük kademesi {tür: kademe}
         self.owned_n = None  # paneldeki "n / 6" sayacı
         self.owned_seen = False  # son okumada sağdaki "Seal Whispers Owned" paneli okundu mu
+        # ekrana gelen kartlar (seçilmeyenler dahil): koşu başlayınca kayda "offers" olarak yazılır.
+        # Rastgele kartların türü / kalitesi ileride "3 karttan en iyisi" alev hesabı için kullanılacak.
+        self.offers = []     # [{"step": kaçıncı seçim (0-5), "cards": [[tür, [[k, v]…]]…], "flame"?, "tier"?}]
+        self.flame_seen = None   # son okunan alev ekranı: (adım, seçili alev, garanti kademe)
 
     def reset(self):
         self.picked, self.cards, self.note, self.mode, self.selected = [], [], "", "cards", None
         self.owned_n = None
         self.owned_seen = False
+        self.offers, self.flame_seen = [], None
+
+    def _note_offer(self):
+        """Eksiksiz okunan kart ekranını offers'a yazar. Aynı adımın yeniden okunması eskisinin yerine geçer;
+        adım sayısı geri düştüyse yeni bir Seal turu başlamıştır, eski kayıtlar atılır."""
+        step = self.count()
+        if self.mode == "flame":
+            if self.selected:
+                self.flame_seen = (step, self.selected, self.tiers.get(self.selected))
+            return
+        if self.mode != "cards" or not self.complete() or step >= 6:
+            return
+        if self.offers and step < max(o["step"] for o in self.offers):
+            self.offers = []
+        entry = {"step": step, "cards": [[side, [[k, v] for k, v, *_ in effs]] for side, effs, _ in self.cards]}
+        if self.flame_seen and self.flame_seen[0] == step:
+            entry["flame"], entry["tier"] = self.flame_seen[1], self.flame_seen[2]
+        self.offers = [o for o in self.offers if o["step"] != step] + [entry]
 
     def count(self):
         return self.owned_n if self.owned_n is not None else len(self.picked)
@@ -1998,10 +2020,12 @@ class VoidSeaState:
             self.mode, self.selected = res["mode"], res["selected"]
             self.tiers = res.get("tiers") or {}
             self.need = res.get("need")
+            self._note_offer()
             return True
         ok = self.on_scan(res["cards"], res["owned"], res["owned_n"])
         if ok:
             self.mode = "cards"
+            self._note_offer()
         return ok
 
     def complete(self):
@@ -2180,10 +2204,14 @@ class RunLog:
         except OSError:
             pass
 
-    def start(self, effs):
-        self.runs.append({"t": time.strftime("%Y-%m-%d %H:%M"), "effects": [[k, v] for k, v, *_ in effs],
-                          "red": 0, "memories": 0, "tracked": False, "picks": {},
-                          "plan": self.settings.get("vs_plan", "red")})
+    def start(self, effs, offers=None):
+        """offers: Terminal'de ekrana gelen kartlar (VoidSeaState.offers); okunmadıysa yazılmaz."""
+        run = {"t": time.strftime("%Y-%m-%d %H:%M"), "effects": [[k, v] for k, v, *_ in effs],
+               "red": 0, "memories": 0, "tracked": False, "picks": {},
+               "plan": self.settings.get("vs_plan", "red")}
+        if offers:
+            run["offers"] = offers
+        self.runs.append(run)
         self.active = True
         self.save()
 
