@@ -543,11 +543,46 @@ def item_name(cid):
     return ITEM_NAMES.get(str(cid)) or f"Item #{cid}"
 
 
+DATA_BACKUP = os.path.join(USER_DIR, "tli_blessing_data.backup.json")   # bir önceki sağlam ayar dosyası
+
+
+def _read_saved_data():
+    """Ayar dosyasını okur. Dosya bir an kilitliyse (güncellemeden sonra yeniden açılış, antivirüs) birkaç kez
+    dener. Okunamazsa bozuk dosya kenara alınır ve yedekten okunur: ayarlar hiçbir durumda sessizce
+    varsayılana dönmesin (eskiden okunamayınca varsayılanlarla açılıyor, ilk kayıtta dosyanın üstüne yazıyordu)."""
+    if not os.path.exists(DATA_FILE):
+        return _read_backup()
+    for i in range(5):
+        try:
+            with open(DATA_FILE, encoding="utf-8") as f:
+                saved = json.load(f)
+            if isinstance(saved, dict):
+                return saved
+            break
+        except ValueError:
+            break                                   # bozuk içerik: beklemek düzeltmez
+        except OSError:
+            time.sleep(0.3 * (i + 1))               # kilitli: biraz bekleyip yeniden dene
+    try:
+        os.replace(DATA_FILE, DATA_FILE + f".corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+    except OSError:
+        pass
+    return _read_backup()
+
+
+def _read_backup():
+    try:
+        with open(DATA_BACKUP, encoding="utf-8") as f:
+            saved = json.load(f)
+        return saved if isinstance(saved, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def load_data():
     data = {"settings": dict(DEFAULT_SETTINGS), "prices": {}, "catalog": list(DEFAULT_CATALOG)}
     try:
-        with open(DATA_FILE, encoding="utf-8") as f:
-            saved = json.load(f)
+        saved = _read_saved_data()
         data["settings"].update(saved.get("settings", {}))
         data["prices"].update(saved.get("prices", {}))
         if "catalog" in saved:
@@ -577,6 +612,14 @@ def save_data(data):
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(DATA_FILE):             # bir önceki sağlam hâl yedekte kalsın
+            try:
+                import shutil
+                shutil.copyfile(DATA_FILE, DATA_BACKUP)
+            except OSError:
+                pass
         os.replace(tmp, DATA_FILE)
     except Exception:
         pass
