@@ -61,7 +61,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.8.9"
+APP_VERSION = "6.9"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -2018,13 +2018,6 @@ def run_gui(start_hidden=False):
             show_update(None)
 
     T(ttk.Checkbutton(bot, variable=var_auto, command=save_flags), "Auto-read on refresh").pack(side="left", padx=(8, 0))
-    var_outline = tk.BooleanVar(value=bool(data["settings"].get("card_outline", True)))
-
-    def save_outline():
-        data["settings"]["card_outline"] = var_outline.get()
-        save_data(data)
-
-    T(ttk.Checkbutton(bot, variable=var_outline, command=save_outline), "Outline profitable cards").pack(side="left", padx=(14, 0))
     T(ttk.Checkbutton(bot2, variable=var_boot, command=save_flags), "Start with Windows").pack(side="left")
     T(ttk.Checkbutton(bot2, variable=var_upd, command=save_flags), "Check for updates").pack(side="left", padx=(14, 0))
     T(tk.Label(bot2, bg=BG, fg=MUTED, font=(F_UI, 9)), "Screen #").pack(side="left", padx=(14, 0))
@@ -2860,10 +2853,11 @@ def run_gui(start_hidden=False):
         except Exception:
             return True
 
-    # ---- Önerilen kartların çerçevesi (v6.8.9): oyunun üstünde, tıklamayı geçiren şeffaf pencere ----
+    # ---- Önerilen kartların çerçevesi (v6.9): oyunun üstünde, tıklamayı geçiren şeffaf pencere ----
     # Kartlar okunup "BUY" denince o kartların etrafına uygulamanın ana renginde (PRI) çerçeve çizilir. Yenileme, dükkânın kapanması,
     # satın alma ya da oyunun arka plana geçmesiyle kalkar. Ayar: "Outline profitable cards" (varsayılan açık).
     HL_KEY = "#010203"                         # bu renk pencerede görünmez (saydam)
+    HL_COLOR = "#1C8AC2"                       # çerçeve rengi: ana renk (PRI) koyulaştırılmış, 5 px
     hl = tk.Toplevel(root)
     hl.overrideredirect(True)
     hl.withdraw()
@@ -2919,8 +2913,8 @@ def run_gui(start_hidden=False):
         hl_cv.delete("all")
         for x0, y0, x1, y1 in boxes:
             # ince koyu kenar + PRI renkli çerçeve + ince koyu iç kenar: açık renkli kart zemininde de seçilsin
-            hl_cv.create_rectangle(x0 - 3, y0 - 3, x1 + 3, y1 + 3, outline=BG, width=1)
-            hl_cv.create_rectangle(x0 - 1, y0 - 1, x1 + 1, y1 + 1, outline=PRI, width=3)
+            hl_cv.create_rectangle(x0 - 4, y0 - 4, x1 + 4, y1 + 4, outline=BG, width=1)
+            hl_cv.create_rectangle(x0 - 1, y0 - 1, x1 + 1, y1 + 1, outline=HL_COLOR, width=5)
             hl_cv.create_rectangle(x0 + 2, y0 + 2, x1 - 2, y1 - 2, outline=BG, width=1)
         hl.deiconify()
         _hl_clickthrough()
@@ -3519,8 +3513,17 @@ def run_gui(start_hidden=False):
         status = (f"Update {upd[0]} available" if upd else "Up to date") + " · " + \
                  {"good": "log OK", "bad": "log not readable"}.get(log_kind, "log starting")
         G = {"open": "\uE8A7", "upd": "\uE895", "restart": "\uE72C", "folder": "\uE838", "bug": "\uEBE8",
-             "quit": "\uE7E8"}
+             "quit": "\uE7E8", "on": "\uE73A", "off": "\uE739"}       # on/off: i\u015Faretli / bo\u015F kutu
+        outline = bool(data["settings"].get("card_outline", True))
+
+        def toggle_outline():
+            data["settings"]["card_outline"] = not outline
+            save_data(data)
+            update_highlight()
+
         dark_menu([("item", "Open", G["open"], lambda: q.put(("tray", "open"))),
+                   ("sep", "", None, None),
+                   ("item", "Outline profitable cards", G["on" if outline else "off"], toggle_outline),
                    ("sep", "", None, None),
                    ("item", "Check for updates", G["upd"], lambda: q.put(("tray", "check_update"))),
                    ("item", "Restart", G["restart"], lambda: q.put(("tray", "restart"))),
