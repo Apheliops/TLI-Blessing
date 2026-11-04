@@ -627,7 +627,7 @@ def _fill_numbers(text, nums):
     nums = list(nums)
     # "chance" önündeki tek başına "o" / "0" / "00" okunamamış "%"tir ("+21" ayrı satır, "00 chance for…"):
     # sayı sanılırsa değer 0 çıkıyordu
-    text = re.sub(r"(?<![\d.%])(?:0{1,2}|o)(?=\s*chance\b)", "%", text, flags=re.I)
+    text = re.sub(r"(?<![\d.%])(?:0{1,2}|y?o)(?=\s*chance\b)", "%", text, flags=re.I)
     out, last = [], 0
     for m in re.finditer(r"%|additional\s*(?:hero|memory)|[枚个]\s*(?:英雄|追忆|虚海)", text, re.I):
         before = text[:m.start()].rstrip()
@@ -849,13 +849,57 @@ def _mask_numbers(wm, np, Image, f):
     return []
 
 
+# Kart metinlerinde geçen kelimeler (tlidb). Seçili kartın parlaması ve parıltı animasyonu harfleri bozabiliyor
+# ("rnrmory", "r.lemory", "Memo", "*raps", "Sfraps", "c,Kance", "dropp&d"): bozuk kelime en yakın kelimeye çevrilir.
+CARD_WORDS = ("memory", "memorys", "memories", "scrap", "scraps", "thread", "threads", "dropped", "drop", "drops",
+              "chance", "additional", "multiplied", "treasure", "treasures", "void", "sea", "hero", "appear",
+              "quantity", "rarity", "replicated", "doubled", "base", "time", "times", "from", "for", "the", "with")
+
+
+def _fix_words(text):
+    import difflib
+
+    def core(w):
+        return re.sub(r"[^a-z]", "", w.lower())
+
+    def close(c, cut):
+        return (difflib.get_close_matches(c, CARD_WORDS, n=1, cutoff=cut) or [None])[0]
+
+    def plain(w):          # rakam / "%" / "+" içermeyen, harfli parça ("+21%", "2" olduğu gibi kalır)
+        return bool(core(w)) and not re.search(r"[\d%+]", w)
+    # parlayan kartta kalın beyaz "1" harf okunabiliyor: "drop I additional"
+    toks = re.sub(r"(?<!\S)[Il|](?=\s+additional)", "1", text).split()
+    out, i = [], 0
+    while i < len(toks):
+        w = toks[i]
+        c = core(w)
+        if not plain(w) or c in CARD_WORDS:
+            out.append(w)
+            i += 1
+            continue
+        # ikiye bölünmüş kelime: "cha ce", "em ory", "r nemory"
+        if i + 1 < len(toks) and plain(toks[i + 1]) and core(toks[i + 1]) not in CARD_WORDS:
+            m = close(c + core(toks[i + 1]), 0.75)
+            if m:
+                out.append(m)
+                i += 2
+                continue
+        if len(c) >= 3:
+            out.append(close(c, 0.6) or w)
+        elif len(c) > 1 or c == "a":
+            out.append(w)
+        # tek harflik kırıntı ("r lcmory") atılır
+        i += 1
+    return " ".join(out)
+
+
 def read_cards_color(img, lines):
     """Void Sea Terminal'deki 3 kartı tek tek renkli ve büyütülmüş okur.
     Kartlar 'Switch' butonunun altında, ekran yüksekliğiyle orantılı aralıklarla durur."""
     import numpy as np
-    from PIL import Image
+    from PIL import Image, ImageOps
     W, H = img.size
-    sw = [(x, y) for t, x, y in lines if SWITCH_RX.fullmatch(squash_cn(t))]
+    sw =[(x, y) for t, x, y in lines if SWITCH_RX.fullmatch(squash_cn(t))]
     cx0 = sw[0][0] if sw else W / 2
     # arayüz ölçeği: sahne ekranın dikey ortasına göre çiziliyor; varsayılan ölçekte Switch merkezin 0.25·H
     # üstünde. Daha büyük ölçekte (ör. 21:9 ekranda %7-8) kartlar da birbirinden o oranda uzak.
@@ -886,8 +930,11 @@ def read_cards_color(img, lines):
             # 4: değerler tlidb kademe değerlerinden biri (yanlış okunmuş sayı kademeye uymaz)
             return 2 if weak else 4 if tier_ok(es) else 3
         more = []
-        for s in (2 * f, 3 * f):
-            col = [t for t, *_ in _reading_order(_ocr_any(crop.resize((int(crop.width * s), int(crop.height * s)))))]
+        # 3. deneme: gri + kontrast açılmış (seçili kartın arkasındaki parlamada soluk alt satır hiç okunmuyordu)
+        gray = lambda: ImageOps.autocontrast(crop.convert("L"), cutoff=2).convert("RGB")
+        for src, s in ((lambda: crop, 2 * f), (lambda: crop, 3 * f), (gray, 2 * f)):
+            im = src()
+            col = [t for t, *_ in _reading_order(_ocr_any(im.resize((int(im.width * s), int(im.height * s)))))]
             head = next((t for t in col if (re.search(r"of", t, re.I) or "秘语" in squash_cn(t))
                          and _side_of_heading(t)), "") or head
             body = [t for t in col if t != head]
@@ -910,7 +957,7 @@ def read_cards_color(img, lines):
                     standalone.append(m.group(1))
                 else:
                     parts.append(t)
-            text = " ".join(parts)
+            text = _fix_words(" ".join(parts))
             present = re.findall(r"\d+(?:[.,]\d+)?", text)
             pool = standalone + [n for n in white_nums if n not in standalone and n not in present]
             got = parse_effects(_fill_numbers(text, pool))
