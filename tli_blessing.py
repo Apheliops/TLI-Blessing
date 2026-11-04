@@ -2861,7 +2861,7 @@ def run_gui(start_hidden=False):
             return True
 
     # ---- Önerilen kartların çerçevesi (v6.8.9): oyunun üstünde, tıklamayı geçiren şeffaf pencere ----
-    # Kartlar okunup "BUY" denince o kartların etrafına yeşil çerçeve çizilir. Yenileme, dükkânın kapanması,
+    # Kartlar okunup "BUY" denince o kartların etrafına uygulamanın ana renginde (PRI) çerçeve çizilir. Yenileme, dükkânın kapanması,
     # satın alma ya da oyunun arka plana geçmesiyle kalkar. Ayar: "Outline profitable cards" (varsayılan açık).
     HL_KEY = "#010203"                         # bu renk pencerede görünmez (saydam)
     hl = tk.Toplevel(root)
@@ -2918,9 +2918,9 @@ def run_gui(start_hidden=False):
         hl.geometry(f"{area['width']}x{area['height']}{area['left']:+d}{area['top']:+d}")
         hl_cv.delete("all")
         for x0, y0, x1, y1 in boxes:
-            # ince koyu kenar + yeşil çerçeve + ince koyu iç kenar: açık renkli kart zemininde de seçilsin
+            # ince koyu kenar + PRI renkli çerçeve + ince koyu iç kenar: açık renkli kart zemininde de seçilsin
             hl_cv.create_rectangle(x0 - 3, y0 - 3, x1 + 3, y1 + 3, outline=BG, width=1)
-            hl_cv.create_rectangle(x0 - 1, y0 - 1, x1 + 1, y1 + 1, outline=GOOD, width=3)
+            hl_cv.create_rectangle(x0 - 1, y0 - 1, x1 + 1, y1 + 1, outline=PRI, width=3)
             hl_cv.create_rectangle(x0 + 2, y0 + 2, x1 - 2, y1 - 2, outline=BG, width=1)
         hl.deiconify()
         _hl_clickthrough()
