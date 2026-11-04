@@ -202,7 +202,7 @@ Found a bug or play in another language or resolution? [Open an issue](https://g
 
 ## Support
 
-TLI Blessing Helper is free and will stay free, with every feature for everyone. If it helps you and you'd like to help me pay for Claude's "chips" (the AI I build this tool with), you can [sponsor me on GitHub](https://github.com/sponsors/Apheliops). It's completely optional. Bug reports, screenshots and shared run results help just as much.
+TLI Blessing Helper is free and will stay free, with every feature for everyone. If it helps you and you'd like to help me pay for Claude's "chips", you can [sponsor me on GitHub](https://github.com/sponsors/Apheliops). It's completely optional. Bug reports, screenshots and shared run results help just as much.
 
 ---
 
