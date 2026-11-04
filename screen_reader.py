@@ -318,6 +318,8 @@ def _read_price_once(im, cx, s, np, Image, pytesseract, lo, spread):
         t_txt += d
         t_sure = t_sure and sure
 
+    if t_txt and t_sure:
+        return int(t_txt), glyphs, ""                   # şablon emin: Tesseract'a gerek yok (okuma ~2 kat hızlı)
     # 2) Tesseract: rakam yüksekliğine göre üç boyda okunur, çoğunluk alınır. Sabit 4× büyütme büyük arayüz
     #    ölçeğinde (rakam 18 px) fazla geliyordu: "75" -> "15" / "5" (3840×1600, GitHub #6). 1440p'deki eski boy
     #    (~13 px × 4) bu boyların içinde.
@@ -591,10 +593,12 @@ def read_offers(im, item_names=None, im2=None):
         if t is not None and abs(t - CARD_TOP * s) <= 80 * s:
             row_tops.setdefault(row_dy, []).append(t)
     row_top = {k: float(np.median(v)) for k, v in row_tops.items()}
-    out = []
     cn = bool(zh_ocr_tag())          # Windows'ta Çince OCR kurulu mu
-    n_cn = 0                         # bu okumada Çince tanınan kart sayısı
-    for i in range(N_CARDS):
+    _load_templates(np)              # rakam şablonları bir kez, iş parçacıkları başlamadan yüklensin
+
+    def one(i):
+        """Tek kartı okur. -> (kayıt, Çince tanındı mı)"""
+        is_cn = False
         cx, row_dy = centers[i]
         # alt satırdaki kart: görüntü o satır üstte olacak şekilde kaydırılır, gerisi aynı
         im = full.crop((0, row_dy, W, H)) if row_dy else full
@@ -628,9 +632,9 @@ def read_offers(im, item_names=None, im2=None):
                 txt, got = _name_cn(cim, cx, s)
                 if got[0] or got[2]:
                     best = (txt, got)
-                    n_cn += 1
+                    is_cn = True
             elif cn and _LAST["cn"] and re.search(r"[一-鿿]", best[0]):
-                n_cn += 1
+                is_cn = True
             rec["text"] = best[0]
             try:  # kartın ikonu (küçük panelde göstermek için): yenileme animasyonunda kart kayabildiği
                 #     için kesit, kartın bulunan üst kenarına göre alınır
@@ -655,7 +659,14 @@ def read_offers(im, item_names=None, im2=None):
                     rec["problem"] = "item name not recognized" + (f" (read: “{t[-22:]}”)" if t else " (name not read)")
                 elif rec["price"] is None:
                     rec["problem"] = "price not read: " + (rec["price_why"] or "unknown reason")
-        out.append(rec)
+        return rec, is_cn
+
+    # kartlar paralel okunur: süre çoğunlukla Tesseract'ın her çağrıda açılan işleminde geçiyor
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        res = list(ex.map(one, range(N_CARDS)))
+    out = [r for r, _ in res]
+    n_cn = sum(1 for _, c in res if c)   # bu okumada Çince tanınan kart sayısı
     if cn and any(not o["sold"] for o in out):
         _LAST["cn"] = n_cn >= 3                    # sonraki okumada hangi dil önce denensin
     return out
