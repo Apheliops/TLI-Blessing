@@ -60,7 +60,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.8.8"
+APP_VERSION = "6.8.9"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -2202,6 +2202,27 @@ def run_gui(start_hidden=False):
     st.update({"offers": None, "scanning": False, "ocr_ts": None, "ocr_msg": "Not read yet.",
                "scan_pending": False})
 
+    def _covers_cards(SR):
+        """Panel ya da ana pencere Blessings kartlarının üstüne denk geliyor mu? Kartlar (iki satır olsa da)
+        oyun alanının üst yarısında. Oyun penceresi bulunamazsa güvenli taraf: evet (gizlenir)."""
+        try:
+            g = SR.game_window_rect()
+        except Exception:
+            g = None
+        if g is None:
+            return True
+        y_end = g["top"] + g["height"] * 0.55
+        for w in (root, ov):
+            try:
+                if w.state() != "normal" or not w.winfo_viewable():
+                    continue
+                x, y, ww, hh = w.winfo_rootx(), w.winfo_rooty(), w.winfo_width(), w.winfo_height()
+            except Exception:
+                return True
+            if x < g["left"] + g["width"] and x + ww > g["left"] and y < y_end and y + hh > g["top"]:
+                return True
+        return False
+
     def start_scan(why):
         if st["scanning"]:
             st["scan_pending"] = True
@@ -2215,12 +2236,15 @@ def run_gui(start_hidden=False):
             report_error("Blessings", f"screen reader not available: {e}")
             st["dirty"] = True
             return
-        # pencere kartların üstünü kapatmasın: yakalarken görünmez yap
+        # pencere kartların üstünü kapatmasın: yakalarken görünmez yap (sadece üstüne denk geliyorsa;
+        # panel kartlardan uzaktaysa her okumada yanıp sönmesin)
+        hide = _covers_cards(SR)
         try:
-            root.attributes("-alpha", 0.0)
-            ov.attributes("-alpha", 0.0)
-            root.update()
-            time.sleep(0.06)
+            if hide:
+                root.attributes("-alpha", 0.0)
+                ov.attributes("-alpha", 0.0)
+                root.update()
+                time.sleep(0.06)
             grab_t = time.time()
             img = SR.grab_screen(int(data["settings"].get("monitor", 1)))
             # ikinci kare: yenileme animasyonu sürüyorsa fiyatı kayan kartlar okunmaz, tekrar okumada denenir
@@ -2236,8 +2260,9 @@ def run_gui(start_hidden=False):
             st["dirty"] = True
             return
         finally:
-            root.attributes("-alpha", 1.0)
-            ov.attributes("-alpha", OV_ALPHA)
+            if hide:
+                root.attributes("-alpha", 1.0)
+                ov.attributes("-alpha", OV_ALPHA)
         st["scanning"] = True
         st["ocr_prev"] = st["ocr_msg"] if not st["ocr_msg"].startswith("Reading") else st.get("ocr_prev", "")
         st["ocr_msg"] = "Reading…"
