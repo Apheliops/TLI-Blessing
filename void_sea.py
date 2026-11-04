@@ -35,13 +35,14 @@ def _item_patterns(suf, word):
     """Memory Scrap (S) / Memory Thread (T) etkileri: Wealth (çıkma şansı, miktar, sabit ek, şanslı ek) ve
     Wonder (×2 / ×3 çarpılma şansı). Kırmızıya katkıları yok; FE planında kullanılır (tlidb metinleri).
     Çarpılma değeri: şans % × (kat − 1), ör. "%84 şansla ×3" -> 168 (beklenen ek yüzde)."""
-    item = r"memory\s*" + word
+    # kartın üstündeki parıltı animasyonu harf bozabiliyor: "Memor+ Scraps", "Memoro Scraps", "aropped"
+    item = r"memor\S?\s*" + word
     return [
-        ("mult" + suf, re.compile(PCT + r"\s*chance\s*for\s*" + item + r"\s*dropped[^%]*?"
+        ("mult" + suf, re.compile(PCT + r"\s*chance\s*for\s*" + item + r"\s*\S{0,2}ropped[^%]*?"
                                   r"(?:multiplied\s*by\s*" + NUM + r"|doubled)", re.I),
          lambda m: _f(m.group(1)) * ((_f(m.group(2)) if m.group(2) else 2.0) - 1)),
         # "%" hiç okunamazsa ("+21 chance for Memory Threads dropped … multiplied by 2", 3840×1600, #4)
-        ("mult" + suf, re.compile(NUM + r"\s*chance\s*for\s*" + item + r"\s*dropped[^%]*?"
+        ("mult" + suf, re.compile(NUM + r"\s*chance\s*for\s*" + item + r"\s*\S{0,2}ropped[^%]*?"
                                   r"(?:multiplied\s*by\s*" + NUM + r"|doubled)", re.I),
          lambda m: _f(m.group(1)) * ((_f(m.group(2)) if m.group(2) else 2.0) - 1)),
         ("app" + suf, re.compile(PCT + r"\s*chance\s*for\s*" + item + r"\s*to\s*appear", re.I), lambda m: _f(m.group(1))),
@@ -74,7 +75,7 @@ EFFECT_PATTERNS = [
     ("rarity", re.compile(PCT_OPT + r"\s*void\s*sea\s*treasure[\W_]*dro\w*[\W_]*rarit\w*", re.I), lambda m: _f(m.group(1))),
     ("tQty",   re.compile(PCT_OPT + r"\s*void\s*sea\s*treasure[\W_]*dro\w*[\W_]*quantit\w*", re.I), lambda m: _f(m.group(1))),
     *[pat for suf, word in (("S", r"scraps?"), ("T", r"threads?")) for pat in _item_patterns(suf, word)],
-    ("none",   re.compile(r"memory\s*(?:scrap|thread)", re.I), lambda m: 0.0),
+    ("none",   re.compile(r"memor\S?\s*(?:scrap|thread)", re.I), lambda m: 0.0),
 ]
 # Çince istemci (v6.1; Reddit'ten bir oyuncunun 2560×1440 ekran görüntülerinden). Metin boşluksuz eşleşir:
 # Çince OCR karakterlerin arasına boşluk koyabiliyor. 英雄追忆 = Hero Memory, 追忆碎絮 = Memory Scrap,
@@ -293,10 +294,10 @@ def reason_cards(picked, cards, best, gains, labels, s):
         return (f"Why: {labels[a]} ({gains[a][1]:+.0f}%) and {labels[b]} ({gains[b][1]:+.0f}%) "
                 f"differ by less than 3%; either is fine.")
     txt = f"Why: {labels[best]} → {_change(picked, cards[best][1], s)}; expected red {gains[best][1]:+.0f}%."
-    if len(order) > 1:
-        o = order[1]
+    for o in order[1:]:          # önerilmeyen kartların hepsi (v6.9.1'den önce sadece ikincisi)
         txt += f" {labels[o]} only {gains[o][1]:+.0f}% ({_change(picked, cards[o][1], s)})."
-        st = _stacked(picked, cards[o][1])
+    if len(order) > 1:
+        st = _stacked(picked, cards[order[1]][1])
         if st and not _stacked(picked, cards[best][1]):
             txt += f" You already have {st}: bonuses of the same type add up, different types multiply."
     return txt
@@ -624,6 +625,9 @@ def _fill_numbers(text, nums):
     'additional Hero' / 'additional Memory' (Scrap / Thread) öncesine sırayla eksik rakamları yerleştirir.
     "32% additional Hero Memory…" gibi zaten "%" ile biten yere sayı konmaz."""
     nums = list(nums)
+    # "chance" önündeki tek başına "o" / "0" / "00" okunamamış "%"tir ("+21" ayrı satır, "00 chance for…"):
+    # sayı sanılırsa değer 0 çıkıyordu
+    text = re.sub(r"(?<![\d.%])(?:0{1,2}|o)(?=\s*chance\b)", "%", text, flags=re.I)
     out, last = [], 0
     for m in re.finditer(r"%|additional\s*(?:hero|memory)|[枚个]\s*(?:英雄|追忆|虚海)", text, re.I):
         before = text[:m.start()].rstrip()
@@ -1497,8 +1501,8 @@ def fe_reason_cards(picked, cards, best, gains, labels, s):
         a, b = order[0], order[1]
         return f"Why: {labels[a]} ({gains[a][0]:+.1f} FE) and {labels[b]} ({gains[b][0]:+.1f} FE) are almost equal."
     txt = f"Why: {labels[best]} → {fe_change(picked, cards[best][1], s)}; {gains[best][0]:+.1f} FE per run."
-    if len(order) > 1:
-        o = order[1]
+    # önerilmeyen kartların hepsi (v6.9.1'den önce sadece ikinci kart yazıyordu, üçüncünün sebebi görünmüyordu)
+    for o in order[1:]:
         txt += f" {labels[o]} only {gains[o][0]:+.1f} FE ({fe_change(picked, cards[o][1], s)})."
     return txt
 
