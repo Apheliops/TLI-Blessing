@@ -137,7 +137,10 @@ def grab_screen(monitor_index=1):
                 monitor_index = 1
             area = mons[monitor_index]
         shot = sct.grab(area)
-        return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        # yakalanan alanın ekrandaki yeri: kart çerçeveleri (önerilen kartların üstüne) buna göre çizilir
+        img.info["area"] = {k: int(area[k]) for k in ("left", "top", "width", "height")}
+        return img
 
 
 def _white(a, np, lo=150, spread=80):
@@ -465,6 +468,8 @@ def _name_cn(im, cx, s):
 
 
 CARD_TOP = 110        # kartın üst kenarı (1440p, yerinde dururken)
+CARD_HALF_W = 76      # kart çerçevesi: kart merkezinden yarı genişlik (1440p)
+CARD_BOX_H = 258      # kart çerçevesi: kartın üst kenarından fiyat satırının altına (1440p)
 CARD_ROW_DY = 251     # ikinci kart satırının kayması (büyük arayüz ölçeğinde 8. kart alta iner; ×1.44'te ölçüldü)
 
 
@@ -569,6 +574,7 @@ def read_offers(im, item_names=None, im2=None):
     Dönen: [{"slot","text","cid","qty","price","sold","excluded"}]"""
     np, Image, pytesseract = _imports()
     W, H = im.size
+    H0 = H                           # kart çerçevesi koordinatları büyütmeden önceki (ekrandaki) boyuta göre
     if im2 is not None and im2.size != im.size:
         im2 = None
     if H < 1400:
@@ -612,6 +618,10 @@ def read_offers(im, item_names=None, im2=None):
         sold = _sold_out(cim, cx, s, np) or (dy != 0 and _sold_out(im, cx, s, np))   # satılmış kart sönük: üst kenar şaşabilir
         rec = {"slot": i + 1, "text": "", "cid": None, "qty": 1, "price": None, "sold": sold, "excluded": False,
                "price_why": "", "problem": ""}
+        # kartın (fiyat satırı dahil) yakalanan görüntüdeki kutusu, ekran pikseliyle: (x0, y0, x1, y1)
+        k = H0 / H
+        rec["box"] = tuple(int(round(v * k)) for v in (cx - CARD_HALF_W * s, row_dy + top - 4 * s,
+                                                        cx + CARD_HALF_W * s, row_dy + top + CARD_BOX_H * s))
         if not sold:
             # eşya tanınana kadar (ve adet "x20" gibi okunana kadar) gevşek eşikleri de dene
             best = None

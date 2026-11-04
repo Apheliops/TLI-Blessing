@@ -43,6 +43,7 @@ DEFAULT_SETTINGS = {
     "min_profit_pct": 0.0,       # "AL" demek için gereken minimum kâr %
     "always_on_top": True,
     "auto_ocr": True,            # yenilemede ekranı otomatik oku
+    "card_outline": True,        # önerilen (BUY) kartların etrafına oyunun üstünde çerçeve çiz
     "autostart": False,          # Windows açılışında gizli başlat (v6.6: yeni kurulumda kapalı; ayarı olan değişmez)
     "monitor": 1,                # oyunun açık olduğu ekran (1 = ana ekran)
     "tesseract_path": "",
@@ -2017,6 +2018,13 @@ def run_gui(start_hidden=False):
             show_update(None)
 
     T(ttk.Checkbutton(bot, variable=var_auto, command=save_flags), "Auto-read on refresh").pack(side="left", padx=(8, 0))
+    var_outline = tk.BooleanVar(value=bool(data["settings"].get("card_outline", True)))
+
+    def save_outline():
+        data["settings"]["card_outline"] = var_outline.get()
+        save_data(data)
+
+    T(ttk.Checkbutton(bot, variable=var_outline, command=save_outline), "Outline profitable cards").pack(side="left", padx=(14, 0))
     T(ttk.Checkbutton(bot2, variable=var_boot, command=save_flags), "Start with Windows").pack(side="left")
     T(ttk.Checkbutton(bot2, variable=var_upd, command=save_flags), "Check for updates").pack(side="left", padx=(14, 0))
     T(tk.Label(bot2, bg=BG, fg=MUTED, font=(F_UI, 9)), "Screen #").pack(side="left", padx=(14, 0))
@@ -2240,9 +2248,11 @@ def run_gui(start_hidden=False):
         # panel kartlardan uzaktaysa her okumada yanıp sönmesin)
         hide = _covers_cards(SR)
         try:
+            outlined = hide_highlight()        # önerilen kart çerçeveleri görüntüye girmesin
             if hide:
                 root.attributes("-alpha", 0.0)
                 ov.attributes("-alpha", 0.0)
+            if hide or outlined:
                 root.update()
                 time.sleep(0.06)
             grab_t = time.time()
@@ -2349,6 +2359,7 @@ def run_gui(start_hidden=False):
                        for o in new]
             st["offers"] = new
             st["offers_t"] = v.get("grab_t") or time.time()
+            st["offers_area"] = (v.get("img").info.get("area") if v.get("img") is not None else None)
             for o in new:             # ekranda görülen her eşya/paket listeye girsin
                 if o["cid"] and not o["excluded"] and isinstance(o["qty"], int) and [o["cid"], o["qty"]] not in data["catalog"]:
                     data["catalog"].append([o["cid"], o["qty"]])
@@ -2849,6 +2860,74 @@ def run_gui(start_hidden=False):
         except Exception:
             return True
 
+    # ---- Önerilen kartların çerçevesi (v6.8.9): oyunun üstünde, tıklamayı geçiren şeffaf pencere ----
+    # Kartlar okunup "BUY" denince o kartların etrafına yeşil çerçeve çizilir. Yenileme, dükkânın kapanması,
+    # satın alma ya da oyunun arka plana geçmesiyle kalkar. Ayar: "Outline profitable cards" (varsayılan açık).
+    HL_KEY = "#010203"                         # bu renk pencerede görünmez (saydam)
+    hl = tk.Toplevel(root)
+    hl.overrideredirect(True)
+    hl.withdraw()
+    hl.configure(bg=HL_KEY)
+    hl_cv = tk.Canvas(hl, bg=HL_KEY, highlightthickness=0, bd=0)
+    hl_cv.pack(fill="both", expand=True)
+    hl_state = {"sig": None, "styled": False}
+    try:
+        hl.attributes("-transparentcolor", HL_KEY)
+        hl.attributes("-topmost", True)
+    except tk.TclError:
+        pass
+
+    def _hl_clickthrough():
+        """Tıklamalar pencerenin içinden oyuna geçsin, odak almasın, görev çubuğunda görünmesin."""
+        if hl_state["styled"] or sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+            hwnd = u.GetParent(hl.winfo_id()) or hl.winfo_id()
+            # WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE. WS_EX_LAYERED'i yeniden verme:
+            # -transparentcolor ayarı silinir ve çerçeve hiç görünmez (denendi)
+            u.SetWindowLongW(hwnd, -20, u.GetWindowLongW(hwnd, -20) | 0x20 | 0x80 | 0x08000000)
+            hl_state["styled"] = True
+        except Exception:
+            pass
+
+    def hide_highlight():
+        """-> çerçeve görünüyor muydu"""
+        was = hl_state["sig"] is not None
+        if was:
+            hl_state["sig"] = None
+            hl_cv.delete("all")
+            hl.withdraw()
+        return was
+
+    def update_highlight():
+        area = st.get("offers_area")
+        boxes = []
+        if (data["settings"].get("card_outline", True) and st.get("offers") and area and fg["visible"]
+                and st.get("shop_open") is not False and not st["scanning"]
+                and st.get("refresh_t", 0) <= st.get("offers_t", 0)):
+            boxes = [o["box"] for o in st["offers"] if o.get("box") and eval_offer(o)[5]]
+        if not boxes:
+            hide_highlight()
+            return
+        sig = (tuple(boxes), tuple(area.values()))
+        if sig == hl_state["sig"]:
+            return
+        hl_state["sig"] = sig
+        hl.geometry(f"{area['width']}x{area['height']}{area['left']:+d}{area['top']:+d}")
+        hl_cv.delete("all")
+        for x0, y0, x1, y1 in boxes:
+            # ince koyu kenar + yeşil çerçeve + ince koyu iç kenar: açık renkli kart zemininde de seçilsin
+            hl_cv.create_rectangle(x0 - 3, y0 - 3, x1 + 3, y1 + 3, outline=BG, width=1)
+            hl_cv.create_rectangle(x0 - 1, y0 - 1, x1 + 1, y1 + 1, outline=GOOD, width=3)
+            hl_cv.create_rectangle(x0 + 2, y0 + 2, x1 - 2, y1 - 2, outline=BG, width=1)
+        hl.deiconify()
+        _hl_clickthrough()
+        hl.attributes("-topmost", True)
+        hl.lift()
+        ov.lift()                              # panel çerçevenin altında kalmasın
+
     def fg_watch():
         state = _fg_state()
         if state:
@@ -2861,6 +2940,10 @@ def run_gui(start_hidden=False):
                 ov.lift()
             else:
                 ov.withdraw()
+        try:
+            update_highlight()
+        except Exception:
+            pass
         root.after(300, fg_watch)
 
     def update_dot():

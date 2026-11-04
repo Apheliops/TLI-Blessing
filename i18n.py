@@ -119,6 +119,7 @@ EXACT_ZH = {
     "●  Recommend": "●  推荐", "○  Hidden": "○  隐藏",
     "—  (search on Exchange)": "—  （请在交易所搜索）",
     "Tax %": "税 %", "Min profit %": "最低利润 %", "Auto-read on refresh": "刷新时自动读取",
+    "Outline profitable cards": "框出可盈利的卡片",
     "Start with Windows": "开机启动", "Check for updates": "检查更新", "Screen #": "屏幕 #",
     "Quit app": "退出程序",
     "Sold out": "已售罄", "Arcane Stone  (excluded)": "奥秘辉石（已排除）",
