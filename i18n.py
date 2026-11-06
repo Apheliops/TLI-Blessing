@@ -83,6 +83,11 @@ EXACT_ZH = {
     "not tradeable": "不可交易", "Scrap / Thread (number not read)": "碎絮 / 游丝（数字未读出）",
     "Void Sea Invitation (not counted)": "虚海请柬（未计入）",
     "Lucky Invitation": "幸运请柬",
+    "Press Switch again, then “Read” to compare it with the 3 cards.": "再按一次“切换”，然后按“读取”与 3 张卡比较。",
+    "The selected flame gives no whisper. Select the other flame and press “Read”.": "当前夜火不提供秘语。请选择另一个夜火并按“读取”。",
+    "No whisper flame here: the next cards are random.": "这里没有提供秘语的夜火：接下来的卡牌是随机的。",
+    "The other flame gives no whisper.": "另一个夜火不提供秘语。",
+    "The selected flame gives no whisper  → change it": "当前夜火不提供秘语 → 请更换",
     "Boss value is an estimate: chance × Invitation price. It learns as your runs count Invitations.":
         "首领秘语的价值是估算：概率 × 请柬价格。随着记录的请柬数量增加会自动修正。",
     "Name this item": "命名此物品", "Name this item…": "命名此物品…", "Save": "保存",

@@ -61,7 +61,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "7.1"
+APP_VERSION = "7.2"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -4358,7 +4358,7 @@ def run_gui(start_hidden=False):
         wrap = max(120, _ov_width() - 30)
         best, gains = vs.advice(data["settings"])
         n = len(vs.cards)
-        pos = VS.POS_NAME.get(n, [str(i + 1) for i in range(n)])
+        pos = VS.POS_NAME.get(n, [str(i + 1) for i in range(n)]) + ["switch"]
         tab_lbls["vs"].config(text=tr(f"Void Sea · {vs.count()}/6"))
 
         def line(text, fg, size=9, bold=False, cmd=None):
@@ -4491,11 +4491,13 @@ def run_gui(start_hidden=False):
                  FG, 9, True)
         if s["missing"]:
             line("⚠ No price for " + ", ".join(s["missing"]) + ": search it on the Exchange once.", ACC, 8)
+        opts = vs.options(s)
+        n = len(opts)
         boss_here = any(c[0] == "boss" for c in vs.cards) or any(k == "luckI" for k, *_ in vs._picked())
         if boss_here and not s["unit"].get("invite"):
             line("⚠ No price for Void Sea Invitation - Craving: search it on the Exchange once.", ACC, 8)
         _vs_owned_warning(line)
-        labels = [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(vs.cards)]
+        labels = [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(opts)]
         learn = ""
 
         if len(vs.picked) >= 6:
@@ -4505,12 +4507,18 @@ def run_gui(start_hidden=False):
             line("Advice appears here when the selection screen opens.", MUTED, 8)
         elif vs.mode == "flame":
             fbest, out = vs.fe_flame(s)
+            note = VS.fe_flame_note(vs.pair, vs.selected)
             if fbest in out:
                 line(f"▶ Put in the {VS.SIDE_LABEL[fbest]} flame", vs_flame_col(fbest, VS_COL[fbest]), 12, True)
             elif fbest == "tie":
                 line("Flames are almost equal", FG, 12, True)
+            elif not out:
+                line(note or "No effect on FE", FG, 11, True)
+                note = ""
             else:
                 line("No effect on FE", MUTED, 11, True)
+            if note:
+                line(note, BAD if "change it" in note else MUTED, 9, "change it" in note)
             for side in sorted(out, key=lambda x: -out[x][0]):
                 line(f"{VS.flame_label(side, vs.tiers)} flame: average {out[side][0]:+.1f} FE ({out[side][1]:+.0f}%)",
                      vs_flame_col(side, GOOD if side == fbest else FG), 9, side == fbest)
@@ -4520,12 +4528,15 @@ def run_gui(start_hidden=False):
                      MUTED if ok else BAD, 9, ok is False)
             elif vs.selected == "arm":
                 line("The Armament flame is selected: the FE plan uses Wealth or Boss + Wonder.", ACC, 9)
+        elif not vs.cards and vs.switch_seen is not None:
+            line(f"Switch card: Base quantity {vs.switch_seen:g}", FG, 11, True)
+            line("Press Switch again, then “Read” to compare it with the 3 cards.", MUTED, 9)
         elif not vs.cards:
             line("Not read yet.", MUTED, 10)
         else:
             best, gains = vs.fe_advice(s)
             if isinstance(best, int):
-                side = vs.cards[best][0]
+                side = opts[best][0]
                 line(f"▶ {pos[best].capitalize()} · {VS.SIDE_LABEL[side]}", VS_COL[side], 12, True)
             elif best == "tie":
                 line("Almost equal", FG, 12, True)
@@ -4535,16 +4546,19 @@ def run_gui(start_hidden=False):
             look = VS.fe_look_on(s, vs.fe_left())
             now = vs.fe_now(s) if look else None
             for i in sorted(range(n), key=lambda i: -gains[i][0]):
-                side, effs, _x = vs.cards[i]
+                side, effs, _x = opts[i]
                 good = gains[i][0] > 0
                 extra = f" (now {now[i][0]:+.1f})" if look and good else ""
-                line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}   {gains[i][0]:+.1f} FE{extra}",
+                guess = " (estimate)" if _x == VS.SWITCH_X and effs[0][2] == "estimate" else ""
+                line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}{guess}   {gains[i][0]:+.1f} FE{extra}",
                      GOOD if i == best else (FG if good else MUTED), 9)
-            paths = VS.fe_paths_note(vs._picked(), vs.cards, s, vs.fe_left())
+            if any(c[2] == VS.SWITCH_X and c[1][0][2] == "estimate" for c in opts):
+                line(VS.fe_switch_note(s), MUTED, 8)
+            paths = VS.fe_paths_note(vs._picked(), opts, s, vs.fe_left())
             if paths:
                 line(paths, FG, 9, True)
             if len(vs.picked) < 6:           # az görülen tür: seçilirse öğrenmeye yardım eder
-                learn = VS.fe_learn_note(vs.cards, best, labels, *VS.fe_learn_counts(vs_log.runs))
+                learn = VS.fe_learn_note(opts, best, labels, *VS.fe_learn_counts(vs_log.runs))
         if vs.mode in ("cards", "flame") and (vs.cards or vs.mode == "flame") and len(vs.picked) < 6:
             line(VS.fe_progress(vs.count(), s), FG if vs.fe_left() == 0 else MUTED, 9, vs.fe_left() == 0)
         if vs.picked:
@@ -4609,7 +4623,7 @@ def run_gui(start_hidden=False):
             return "Open the Void Sea Terminal", MUTED
         best, _gains = vs.fe_advice(s) if fe else vs.advice(data["settings"])
         if isinstance(best, int):
-            side = vs.cards[best][0]
+            side = (vs.options(s) if fe else vs.cards)[best][0]
             return f"▶ {pos[best].capitalize()} · {VS.SIDE_LABEL[side]}", VS_COL[side]
         return ("Almost equal: either card", FG) if best == "tie" else ("No card helps", MUTED)
 

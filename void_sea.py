@@ -138,7 +138,7 @@ EFFECT_NAMES = {
 ARM_ONLY = {"appear", "memQty", "flat", "luck"}
 WON_ONLY = {"rarity", "tQty", "multS", "multT"}
 WEA_ONLY = {"appS", "qtyS", "flatS", "luckS", "appT", "qtyT", "flatT", "luckT"}
-SIDE_LABEL = {"arm": "Armament", "won": "Wonder", "wea": "Wealth", "boss": "Boss", "?": "?"}
+SIDE_LABEL = {"arm": "Armament", "won": "Wonder", "wea": "Wealth", "boss": "Boss", "?": "?", "other": "Other"}
 POS_NAME = {1: ["middle"], 2: ["left", "right"], 3: ["left", "middle", "right"]}
 
 # Doğrulanmış değer değil, dengeli tahmin. Taban 3 / üs 1 sabit ek memory'yi aşırı değerli gösterip
@@ -575,6 +575,9 @@ def read_selected_flame(img, lines):
     m = SEL_RX.search(main) or CN_SEL_RX.search(squash_cn(main))
     if m:
         return _side_of_word(next(g for g in m.groups() if g))
+    # fısıltı garanti etmeyen alev: "100% chance for Void Pirates to drop 1 additional Embers"
+    if re.search(r"pirates\s*to\s*drop|additional\s*embers", main, re.I):
+        return "other"
     after = [(x, y) for t, x, y in lines if re.search(r"defeating\s*pirates", t, re.I) or "击败虚海" in squash_cn(t)]
     if not after:
         return None
@@ -1039,9 +1042,15 @@ def analyze(img):
         good = lambda cs: sum(1 for _, e, _ in cs if e and all(v > 0 or k == "none" for k, v, *_ in e))
         if good(colored) >= good(cards):
             cards = colored
+    # Switch'e basılınca ortada tek kart kalır: Base Drop Quantity (üç kartın arasında hiç çıkmıyor, 618 kartta 0)
+    switch = None
+    if (not flame and len(cards) == 1 and cards[0][1] and all(k == "baseQ" for k, *_ in cards[0][1])
+            and any(SWITCH_RX.fullmatch(squash_cn(t)) for t, *_ in lines)):
+        switch = cards[0][1][0][1]
+        cards = []
     res = {"mode": "flame" if flame else "cards", "cards": [] if flame else cards, "owned": owned,
            "owned_n": owned_n, "selected": read_selected_flame(img, lines) if flame else None, "tiers": {},
-           "cjk": cn_screen(lines)}
+           "cjk": cn_screen(lines), "switch": switch}
     if flame:
         try:
             cols = read_flame_colors(img)
@@ -1069,7 +1078,8 @@ def _useful(res, lang="en"):
     # Çince karakter varsa kabul edilir (İngilizce oynayan ama Çince paketi kurulu olanlar için)
     if lang != "en" and not res.get("cjk", True):
         return False
-    return res["mode"] in ("flame", "overview") or bool(res["cards"]) or bool(res["owned"])
+    return (res["mode"] in ("flame", "overview") or bool(res["cards"]) or bool(res["owned"])
+            or res.get("switch") is not None)
 
 
 def analyze_any(img):
@@ -1088,14 +1098,24 @@ def analyze_any(img):
 
 
 def flame_pair(selected, shapes=None):
-    """Ekrandaki iki alevin türleri: seçili alev Wealth ya da Armament ise ondan belli; Wonder seçiliyse
-    (ya da okunamadıysa) uygulamanın planına göre (FLAME_PAIR: kırmızı planı arm/won, FE planı wea/won).
-    shapes (read_flame_shapes): yazıda sadece seçili alev geçer. Wealth alevinin altı çatallı, Wonder ve Boss sivri.
-    FE planında Wonder seçiliyken iki alev de sivriyse karşıdaki Boss'tur; Boss seçiliyken çatallı olan Wealth'tir."""
+    """Ekrandaki iki üst alevin türleri. Yazıda sadece seçili alev geçer; karşısındaki ikonundan anlaşılır
+    (read_flame_shapes, FE planı): çatallı Wealth, sivri Wonder ya da Boss, diğerleri fısıltı vermez.
+    Sivri karşı alevin türü seçili alevden çıkar: Wonder karşısında Boss, Boss ya da Wealth karşısında Wonder.
+    -> (tür, tür) | tek alev fısıltı veriyorsa (tür,) | fısıltı veren yoksa () | seçili fısıltı vermiyor, karşısı
+    sivri ama hangisi belli değil ("?",). Şekiller okunamazsa eski varsayım."""
     vals = list((shapes or {}).values())
+    own = {"won": "point", "boss": "point", "wea": "notch", "other": "other"}.get(selected)
+    if FLAME_PAIR[0] == "wea" and len(vals) == 2 and own in vals:
+        vals.remove(own)
+        rest = vals[0]
+        if selected == "other":
+            return {"notch": ("wea",), "point": ("?",)}.get(rest, ())
+        if rest == "other":
+            return (selected,)
+        if rest == "notch":
+            return {"won": ("wea", "won"), "boss": ("boss", "wea"), "wea": ("wea",)}[selected]
+        return {"won": ("boss", "won"), "boss": ("boss", "won"), "wea": ("wea", "won")}[selected]
     if selected == "boss":
-        return ("boss", "wea") if "notch" in vals else ("boss", "won")
-    if selected == "won" and FLAME_PAIR[0] == "wea" and vals.count("point") == 2:
         return ("boss", "won")
     if selected == "wea":
         return ("wea", "won")
@@ -1114,6 +1134,16 @@ def flame_tiers(cols, selected, sel_tier, shapes=None):
     left, right, center = cols.get("left"), cols.get("right"), cols.get("center")
     out = {}
     pair = flame_pair(selected, shapes)
+    if len(pair) < 2:
+        if selected in pair:
+            t = sel_tier if sel_tier is not None else tier(center)
+            if t is not None:
+                out[selected] = t
+        elif pair:              # seçili alev fısıltı vermiyor: öteki köşenin rengi
+            side = next((k for k, v in (shapes or {}).items() if v != "other"), None)
+            if side and tier(cols.get(side)) is not None:
+                out[pair[0]] = tier(cols[side])
+        return out
     if selected not in pair:
         # seçili alev yazıdan okunamadı: eski varsayım (sol Armament/Wealth, sağ Wonder)
         for side, c in zip(pair, (left, right)):
@@ -1194,9 +1224,10 @@ def flame_advice(picked, s, tiers=None, pool=None, score=None):
 
 
 def read_flame_shapes(img):
-    """Üst köşelerdeki alevlerin şekli -> {"left"|"right": "notch" (Wealth: altı çatallı) | "point" (Wonder, Boss)}.
-    Ölçü: en büyük parlak renkli parçanın yükseklik / genişlik oranı (ölçekten bağımsız). Kayıtlı 9 ekranın 18 köşesinde
-    çatallı en çok 1.34, sivri en az 1.44. Arada kalan ya da bulunamayan alev yazılmaz: eski varsayım geçerli kalır."""
+    """Üst köşelerdeki alevler -> {"left"|"right": "notch" (Wealth: altı çatallı) | "point" (Wonder, Boss: göz, alt sivri)
+    | "other" (S, damla ya da boş: fısıltı vermez)}. Ölçüler ölçekten bağımsız: en büyük parlak renkli parçanın
+    yükseklik / genişlik oranı ve alt kısmındaki iç boşluk. 11 ekranın 22 köşesinde çatallı oran en çok 1.34; sivri en
+    az 1.44, alt boşluk en çok 0.09; S (2 köşe, mavi) alt boşluk en az 0.16. Arada kalan alev yazılmaz: eski varsayım."""
     import numpy as np
     from PIL import Image
     W, H = img.size
@@ -1223,14 +1254,28 @@ def read_flame_shapes(img):
                         stack.append((u, v))
             if len(part) > len(best):
                 best = part
-        if len(best) < 150:
+        if len(best) < 150:         # renkli ikon yok: boş slot ya da gri alev
+            out[side] = "other"
             continue
-        ys, xs = [b[0] for b in best], [b[1] for b in best]
-        ratio = (max(ys) - min(ys) + 1) / (max(xs) - min(xs) + 1)
+        ys = np.array([b[0] for b in best])
+        xs = np.array([b[1] for b in best])
+        h, w = ys.max() - ys.min() + 1, xs.max() - xs.min() + 1
+        ratio = h / w
         if ratio <= 1.37:
             out[side] = "notch"
         elif ratio >= 1.41:
-            out[side] = "point"
+            body = np.zeros((h, w), bool)
+            body[ys - ys.min(), xs - xs.min()] = True
+            gaps = []
+            for row in body[int(0.6 * h):]:
+                idx = np.where(row)[0]
+                if len(idx):
+                    gaps.append(1 - len(idx) / (idx[-1] - idx[0] + 1))
+            gap = sum(gaps) / len(gaps) if gaps else 0.0
+            if gap >= 0.13:
+                out[side] = "other"
+            elif gap <= 0.11:
+                out[side] = "point"
     return out
 
 
@@ -1295,15 +1340,82 @@ FE_INV_BASE_RUNS = 5   # Boss'suz koşularda kendiliğinden düşme oranı 0'a b
 # Boss kademeleri: Magic / Rare / Epic oyuncunun ekranlarından (#9: mavi %10, mor %20, turuncu %40);
 # tlidb'de sayı yok. Normal görülmedi, tahmin.
 FE_BOSS_POOL = [("luckI", (0.05, 0.1, 0.2, 0.4))]
+# Boss alevi her seçimde çıkmıyor: Boss yolunda bir seçimde Boss alevi bulunma olasılığı. Başlangıç %50 (tlidb:
+# Netherrealm'de Boss alevi taşıyan canavar %50 şansla), alev ekranlarında görülenlerle düzelir.
+FE_BOSS_RATE = 0.5
+FE_BOSS_RATE_N = 4
+
+
+def fe_boss_rate(runs):
+    """Alev ekranlarının kaçında Boss alevi vardı (kayıttaki "flames")."""
+    seen = [o["flames"] for r in runs for o in r.get("offers", []) if "flames" in o]
+    return (sum("boss" in f for f in seen) + FE_BOSS_RATE * FE_BOSS_RATE_N) / (len(seen) + FE_BOSS_RATE_N)
 FE_FLAME_POOL = {   # kademe değerleri: Normal / Magic / Rare / Epic (tlidb Whisper_of_Wealth / _of_Wonder)
-    "wea": [("baseQ", (9, 14, 18, 36)),
-            ("appS", (14, 21, 28, 56)), ("qtyS", (35, 53, 70, 140)), ("flatS", (10, 15, 19, 39)),
+    "wea": [("appS", (14, 21, 28, 56)), ("qtyS", (35, 53, 70, 140)), ("flatS", (10, 15, 19, 39)),
             ("luckS", (0.2 * 49, 0.2 * 73, 0.2 * 97, 0.2 * 194)),
             ("appT", (35, 53, 70, 140)), ("qtyT", (21, 32, 42, 84)), ("flatT", (1, 1, 1, 2)),
             ("luckT", (0.2 * 3, 0.2 * 4, 0.2 * 5, 0.2 * 10))],
-    "won": [("baseQ", (9, 14, 18, 36)), ("tQty", (14, 21, 28, 56)), ("rarity", (25, 37, 49, 98)),
+    "won": [("tQty", (14, 21, 28, 56)), ("rarity", (25, 37, 49, 98)),
             ("multS", (21, 32, 42, 84)), ("multT", (21, 32, 42, 84))],
 }
+
+
+# Switch: dördüncü seçenek, üç kartın yerine alınabilen Base Drop Quantity (Wonder). Kalitesini oyun yazmıyor, tlidb ve
+# rehberlerde de yok. Gözlem (4 ekran, 2026-11-06): üç kartın en düşük kalitesine eşit; rastgele olsa yaklaşık %3.
+# Kanıt az: tahmin olarak gösterilir, gerçek kart okununca o kullanılır, kayıttaki Switch'lerle denetlenir.
+FE_SWITCH_VALUES = (9, 14, 18, 36)
+FE_SWITCH_MIN_CHECKS = 5   # bu kadar denetimden sonra
+FE_SWITCH_MIN_RATE = 0.6   # kural bundan az tutuyorsa tahmin yapılmaz
+SWITCH_X = 10 ** 9         # kart listesinde Switch'in konumu (ekranda yeri yok)
+
+
+def _card_tier(effs):
+    """Kartın kademesi yazılı değerinden; birden çok kademeye uyuyorsa ("Flat Thread 1") ya da katlanmışsa None."""
+    if not effs:
+        return None
+    k, v = effs[0][0], effs[0][1]
+    for pool in (*FE_FLAME_POOL.values(), *FLAME_POOL.values(), FE_BOSS_POOL):
+        for kk, vals in pool:
+            if kk == k and kk != "none":
+                hits = [i for i, x in enumerate(vals) if abs(x - v) < 0.051]
+                return hits[0] if len(hits) == 1 else None
+    return None
+
+
+def switch_estimate(card_effs):
+    """Üç kartın etkilerinden Switch kartının tahmini değeri (en düşük kademe) ya da None."""
+    tiers = [t for t in (_card_tier(e) for e in card_effs) if t is not None]
+    return FE_SWITCH_VALUES[min(tiers)] if tiers else None
+
+
+def fe_switch_rule(runs):
+    """Kural kayıtlarda tutuyor mu -> (tutan, denetlenen). Gerçek değer: okunan Switch kartı ("switch") ya da o adımda
+    seçilmiş Base Quantity (Base Quantity sadece Switch'ten geldiği için)."""
+    hits = total = 0
+    for r in runs:
+        eff = run_whispers(r["effects"])
+        for o in r.get("offers", []):
+            real = o.get("switch")
+            if real is None and o["step"] < len(eff) and eff[o["step"]][0] == "baseQ":
+                real = eff[o["step"]][1]
+            if real is None:
+                continue
+            est = switch_estimate([[tuple(e) for e in c[1]] for c in o["cards"]])
+            if est is not None:
+                total += 1
+                hits += abs(est - real) < 0.051
+    return hits, total
+
+
+def fe_switch_ok(s):
+    hits, total = (s or {}).get("switch_rule") or (0, 0)
+    return total < FE_SWITCH_MIN_CHECKS or hits / total >= FE_SWITCH_MIN_RATE
+
+
+def fe_switch_note(s):
+    hits, total = (s or {}).get("switch_rule") or (0, 0)
+    return (f"Switch is an estimate: same quality as the lowest card ({hits} of {total} checks so far). "
+            "Press Switch, then “Read” to see the real card.")
 
 
 def fe_totals(effects):
@@ -1469,7 +1581,7 @@ def fe_typical(runs):
         for k, v in run_whispers(r["effects"]):
             seen.setdefault(k, []).append(v)
     out = {}
-    for side in (*FE_FLAME_POOL.values(), FE_BOSS_POOL):
+    for side in (*FE_FLAME_POOL.values(), FE_BOSS_POOL, [("baseQ", FE_SWITCH_VALUES)]):
         for k, vals in side:
             out[k] = sorted(seen[k])[len(seen[k]) // 2] if seen.get(k) else vals[2]
     return out
@@ -1542,7 +1654,7 @@ def fe_model(runs, prices, cache=True):
              else prices.get(INV_DEFAULT) or 0.0)
     out = {"base": base, "unit": {"scrap": prices.get(SCRAP_ID) or 0.0, "thread": thread_v, "invite": inv_v},
            "n_base": len(recent), "mix": {c: n / total for c, n in mix.items() if n}, "missing": missing,
-           "inv": fe_inv_fit(runs)}
+           "inv": fe_inv_fit(runs), "boss_rate": fe_boss_rate(runs), "switch_rule": fe_switch_rule(runs)}
     fit = fe_fit(runs, base)
     out["fit_info"] = fit
     if fit["active"]:
@@ -1637,6 +1749,15 @@ def fe_combo_stats(runs, prices):
 def fe_flame_advice(picked, s, tiers=None, pair=None):
     """FE planında alevler (ekrandaki ikisi: Wealth / Boss / Wonder): o kalitedeki fısıltıların ortalama FE katkısı.
     -> (en iyi tür | "tie" | None, {tür: (ortalama FE artışı, yüzde)})"""
+    if pair is not None and len(pair) < 2:
+        if not pair or pair[0] == "?":
+            return None, {}
+        side = pair[0]
+        base = fe_score(picked, s)
+        gs = [fe_score(picked + [e], s) - base
+              for e in flame_values(FE_BOSS_POOL if side == "boss" else FE_FLAME_POOL[side], (tiers or {}).get(side, DEFAULT_TIER))]
+        g = sum(gs) / len(gs)
+        return (side if g > 1e-9 else None), {side: (g, g / base * 100 if base > 0 else 0.0)}
     pool = FE_FLAME_POOL
     if pair and "boss" in pair:
         pool = {side: FE_BOSS_POOL if side == "boss" else FE_FLAME_POOL[side] for side in pair}
@@ -1667,13 +1788,22 @@ def fe_change(before, effs, s):
 # --------------------------------------------------------------------------- #
 FE_LOOK_MIN_SCREENS = 30   # bundan az kayıtlı ekranda (yaklaşık 5 koşu) anlık kazanca bakılır
 FE_LOOK_K = 40             # kart başına denenen gelecek sayısı
+FE_LOOK_SWITCH = False     # gelecek ekranlara Switch kartı eklensin mi (koşu bölmeli testle seçilir)
 _FE_LOOK_CACHE = {}
 
 
 def fe_screens(runs):
     """Memory materials koşularında ekrana gelmiş gerçek kart üçlüleri: [[kart etkileri], …]."""
-    return [[[(k, v) for k, v in effs] for _side, effs in o["cards"]]
-            for r in fe_runs(runs) for o in r.get("offers", [])]
+    out = []
+    for r in fe_runs(runs):
+        for o in r.get("offers", []):
+            screen = [[(k, v) for k, v in effs] for _side, effs in o["cards"]]
+            if FE_LOOK_SWITCH:           # gerçek oyunda her ekranda Switch de var
+                v = o.get("switch") or switch_estimate(screen)
+                if v is not None:
+                    screen = screen + [[("baseQ", v)]]
+            out.append(screen)
+    return out
 
 
 def fe_look_on(s, left):
@@ -1711,17 +1841,23 @@ def _fe_look_calc(picked, cards, s, left):
     effs = [c[1] for c in cards]
     key = (repr((sig(picked), [sig(e) for e in effs], left)), len(s["screens"]), round(s["unit"]["scrap"], 6),
            round(s["unit"]["thread"], 6), round(s["base"]["scrap"], 4), round(s["base"]["thread"], 4), bool(s.get("fit")),
-           round(s["unit"].get("invite", 0.0), 6), tuple(sorted((s.get("inv") or {}).items())))
+           round(s["unit"].get("invite", 0.0), 6), tuple(sorted((s.get("inv") or {}).items())),
+           round(s.get("boss_rate", FE_BOSS_RATE), 3))
     if key in _FE_LOOK_CACHE:
         return _FE_LOOK_CACHE[key]
     # aynı durumda hep aynı sonuç: overlay her çizimde soruyor, öneri kendi kendine değişmesin
     rng = random.Random(zlib.crc32(key[0].encode("utf-8")))
     futures = [[rng.choice(s["screens"]) for _ in range(left)] for _ in range(FE_LOOK_K)]
-    # İki yol: gelecek ekranlar kayıtlı hâliyle (Wealth + Wonder) ya da Wealth kartları Boss'a çevrilmiş (Boss + Wonder).
+    # İki yol: gelecek ekranlar kayıtlı hâliyle (Wealth + Wonder) ya da Boss alevi bulunan seçimlerde Wealth kartları
+    # Boss'a çevrilmiş (Boss + Wonder).
     # Kartın değeri, onu alınca hangi yol iyiyse onun koşu sonu FE'si: seçilenler ve kalan hak kararı değiştirir.
     lanes = {"wea": futures}
     if _boss_on(picked, cards, s):
-        lanes["boss"] = [[[_to_boss(e) for e in screen] for screen in fut] for fut in futures]
+        # Boss alevi her seçimde yok: olmadığı seçimde ekran kayıtlı hâliyle kalır
+        rate = s.get("boss_rate", FE_BOSS_RATE)
+        rng2 = random.Random(zlib.crc32(key[0].encode("utf-8")) + 1)
+        lanes["boss"] = [[[_to_boss(e) for e in screen] if rng2.random() < rate else screen for screen in fut]
+                         for fut in futures]
 
     def final(start, fs):
         total = 0.0
@@ -1778,10 +1914,22 @@ def fe_paths_note(picked, cards, s, left):
 def fe_inv_note(s):
     """Boss / Invitation hesabının dayanağı: öğrenilen oran ya da yazılı değer."""
     inv = s.get("inv") or {}
+    rate = f" A Boss flame is expected on about {s.get('boss_rate', FE_BOSS_RATE) * 100:.0f}% of picks."
     if not inv.get("boss_runs"):
-        return "Boss value is an estimate: chance × Invitation price. It learns as your runs count Invitations."
+        return "Boss value is an estimate: chance × Invitation price. It learns as your runs count Invitations." + rate
     return (f"From your {inv['boss_runs']} Boss runs: {inv['got']} Invitation(s), "
-            f"×{inv['c']:.2f} of the written chance.")
+            f"×{inv['c']:.2f} of the written chance." + rate)
+
+
+def fe_flame_note(pair, selected):
+    """Fısıltı vermeyen alev varsa panelde söylenecek; yoksa boş."""
+    if pair is None or len(pair) == 2:
+        return ""
+    if pair == ("?",):
+        return "The selected flame gives no whisper. Select the other flame and press “Read”."
+    if not pair:
+        return "No whisper flame here: the next cards are random."
+    return "The other flame gives no whisper." if selected in pair else "The selected flame gives no whisper  → change it"
 
 
 def fe_progress(count, s):
@@ -1852,8 +2000,13 @@ def fe_learn_note(cards, best, labels, counts, n):
 
 
 def fe_reason_flame(picked, out, best, tiers=None):
+    if not out:
+        return ""
     if best is None:
         return "Why: neither flame adds FE."
+    if len(out) == 1:
+        a = next(iter(out))
+        return f"Why: on average a {flame_label(a, tiers)} whisper adds {out[a][0]:+.1f} FE."
     a, b = list(out)
     txt = (f"Why: on average a {flame_label(a, tiers)} whisper adds {out[a][0]:+.1f} FE, "
            f"a {flame_label(b, tiers)} whisper {out[b][0]:+.1f} FE"
@@ -2296,6 +2449,9 @@ class VoidSeaState:
         self.selected = None # alev ekranında seçili alev
         self.tiers = {}      # alev ekranında alevlerin garanti en düşük kademesi {tür: kademe}
         self.pair = None     # alev ekranındaki iki alevin türü
+        self.flame_known = None  # bu alev ekranında yazısı okunan sivri ikonlu alev: "won" | "boss"
+        self.switch_seen = None  # bu ekranda okunan Switch kartının değeri
+        self.switch_view = False # son okuma Switch ekranıydı
         self.owned_n = None  # paneldeki "n / 6" sayacı
         self.owned_seen = False  # son okumada sağdaki "Seal Whispers Owned" paneli okundu mu
         # ekrana gelen kartlar (seçilmeyenler dahil): koşu başlayınca kayda "offers" olarak yazılır.
@@ -2308,6 +2464,8 @@ class VoidSeaState:
         self.owned_n = None
         self.owned_seen = False
         self.offers, self.flame_seen = [], None
+        self.pair, self.flame_known = None, None
+        self.switch_seen, self.switch_view = None, False
 
     def _note_offer(self):
         """Eksiksiz okunan kart ekranını offers'a yazar. Aynı adımın yeniden okunması eskisinin yerine geçer;
@@ -2315,15 +2473,20 @@ class VoidSeaState:
         step = self.count()
         if self.mode == "flame":
             if self.selected:
-                self.flame_seen = (step, self.selected, self.tiers.get(self.selected))
+                self.flame_seen = (step, self.selected, self.tiers.get(self.selected), self.pair)
             return
-        if self.mode != "cards" or not self.complete() or step >= 6:
+        if self.mode != "cards" or not self.cards or not self.complete() or step >= 6:
             return
         if self.offers and step < max(o["step"] for o in self.offers):
             self.offers = []
         entry = {"step": step, "cards": [[side, [[k, v] for k, v, *_ in effs]] for side, effs, _ in self.cards]}
+        if self.switch_seen is not None:
+            entry["switch"] = self.switch_seen
         if self.flame_seen and self.flame_seen[0] == step:
             entry["flame"], entry["tier"] = self.flame_seen[1], self.flame_seen[2]
+            pair = self.flame_seen[3]
+            if pair is not None and "?" not in pair:   # Boss alevi ne sıklıkla çıkıyor (fe_boss_rate)
+                entry["flames"] = list(pair)
         self.offers = [o for o in self.offers if o["step"] != step] + [entry]
 
     def count(self):
@@ -2331,24 +2494,43 @@ class VoidSeaState:
 
     def on_analyze(self, res):
         """analyze() sonucunu uygular. Ekran tanınmadıysa False döner."""
+        if res.get("switch") is not None:      # Switch ekranı: üç kart yerinde kalır, dördüncü seçenek öğrenilir
+            self.on_scan([], res["owned"], res["owned_n"])
+            self.mode, self.switch_seen, self.switch_view = "cards", res["switch"], True
+            self._note_offer()
+            return True
+        self.switch_view = False
+        before = [sig(c[1]) for c in self.cards]
         if res["mode"] in ("flame", "overview"):
             self.on_scan([], res["owned"], res["owned_n"])
             self.mode, self.selected = res["mode"], res["selected"]
             self.tiers = res.get("tiers") or {}
             self.pair = res.get("pair")
             self.need = res.get("need")
+            if res["mode"] == "flame":
+                known = self.flame_known
+                if self.pair == ("?",) and known:
+                    # fısıltısız alev seçili ama sivri olanın türü bu ekranda okunmuştu
+                    self.pair = (known,)
+                    if "?" in self.tiers:
+                        self.tiers[known] = self.tiers.pop("?")
+                elif self.selected in ("won", "boss"):
+                    self.flame_known = self.selected
             self._note_offer()
             return True
         ok = self.on_scan(res["cards"], res["owned"], res["owned_n"])
         if ok:
             self.mode = "cards"
+            if before and before != [sig(c[1]) for c in self.cards]:
+                self.switch_seen = None      # başka bir ekran: Switch kartı da başka
+            self.flame_known = None          # alev ekranından çıkıldı: sonraki ekranda alevler başka
             self._note_offer()
         return ok
 
     def complete(self):
         """Okuma eksiksiz mi? Kart ekranında 3 kartın hepsinin etkisi okunmuş olmalı
         (kartlar açılış animasyonundayken okunursa bazıları boş kalır)."""
-        if self.mode in ("flame", "overview"):
+        if self.mode in ("flame", "overview") or (self.switch_view and not self.cards):
             return True
         # sadece "Memory Scrap / Thread" okunduysa (sayı düşmüş, Boss kartı hariç) kart okunmamış sayılır
         return len(self.cards) >= 3 and all(effs and (side == "boss" or any(k != "none" for k, *_ in effs))
@@ -2433,14 +2615,23 @@ class VoidSeaState:
     def _picked(self):
         return [e for _, effs in self.picked for e in effs]
 
+    def options(self, s):
+        """FE planında seçenekler: ekrandaki kartlar + Switch kartı (okunduysa gerçeği, yoksa tahmini)."""
+        if self.mode != "cards" or len(self.cards) < 3:
+            return list(self.cards)
+        if self.switch_seen is not None:
+            return list(self.cards) + [("won", [("baseQ", self.switch_seen, "read")], SWITCH_X)]
+        v = switch_estimate([c[1] for c in self.cards]) if fe_switch_ok(s) else None
+        return list(self.cards) + ([("won", [("baseQ", v, "estimate")], SWITCH_X)] if v is not None else [])
+
     def fe_advice(self, s):
         if len(self.picked) >= 6:
             return None, []
-        return fe_look(self._picked(), self.cards, s, self.fe_left())
+        return fe_look(self._picked(), self.options(s), s, self.fe_left())
 
     def fe_now(self, s):
         """Kartların şu anki (kalan seçimler sayılmadan) FE kazancı."""
-        return recommend(self._picked(), self.cards, s, score=fe_score)[1]
+        return recommend(self._picked(), self.options(s), s, score=fe_score)[1]
 
     def fe_left(self):
         """Bu seçimden sonra kalan seçim sayısı (5/6 okumasında 0: bu son seçim)."""
@@ -2457,7 +2648,7 @@ class VoidSeaState:
         if self.mode != "cards" or len(self.picked) >= 6:
             return ""
         best, gains = self.fe_advice(s)
-        return fe_reason_cards(picked, self.cards, best, gains, labels, s, self.fe_left())
+        return fe_reason_cards(picked, self.options(s), best, gains, labels, s, self.fe_left())
 
 
 # --------------------------------------------------------------------------- #
