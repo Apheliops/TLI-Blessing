@@ -76,6 +76,11 @@ EFFECT_PATTERNS = [
     ("tQty",   re.compile(PCT_OPT + r"\s*void\s*sea\s*treasure[\W_]*dro\w*[\W_]*quantit\w*", re.I), lambda m: _f(m.group(1))),
     *[pat for suf, word in (("S", r"scraps?"), ("T", r"threads?")) for pat in _item_patterns(suf, word)],
     ("none",   re.compile(r"memor\S?\s*(?:scrap|thread)", re.I), lambda m: 0.0),
+    # Boss Whisper (#9): "40% chance for 1 additional Void Sea Invitation(s) to drop from Void Sea Treasures"
+    ("luckI",  re.compile(PCT + r"\s*chance\s*for\s*" + NUM + r"\s*additional\s*(?:void\s*sea\s*)?invit", re.I),
+               lambda m: _f(m.group(1)) / 100 * _f(m.group(2))),
+    # sayılar okunamadıysa: kart Boss, değeri bilinmiyor (describe "not counted" yazar)
+    ("none",   re.compile(r"invit\w{3,}", re.I), lambda m: 0.0),
 ]
 # Çince istemci (v6.1; Reddit'ten bir oyuncunun 2560×1440 ekran görüntülerinden). Metin boşluksuz eşleşir:
 # Çince OCR karakterlerin arasına boşluk koyabiliyor. 英雄追忆 = Hero Memory, 追忆碎絮 = Memory Scrap,
@@ -106,6 +111,9 @@ CN_EFFECT_PATTERNS = [
     ("baseQ",  re.compile(r"基础掉落数量\D{0,3}?\+?" + CN_NUM + "%"), lambda m: _f(m.group(1))),
     # (tlidb) Treasure Drop Quantity: "虚海宝藏的掉落数量 +14%"
     ("tQty",   re.compile(r"虚海宝藏(?:的)?掉落数量\D{0,3}?\+?" + CN_NUM + "%"), lambda m: _f(m.group(1))),
+    # (?) 首领秘语: İngilizcesinden ve 英雄追忆 satırından tahmin ("…20% 概率额外掉落 1 张虚海请柬")
+    ("luckI",  re.compile(CN_NUM + "%" + _GL + _EW + "掉落" + CN_NUM + r"\D{0,2}虚海请柬"),
+               lambda m: _f(m.group(1)) / 100 * _f(m.group(2))),
     # (✓) kırmızıya katkısı yok: 追忆碎絮 (Scrap), 追忆游丝 (Thread), 虚海请柬 (Invitation)
     ("none",   re.compile(r"追忆碎絮|追忆游丝|请柬"), lambda m: 0.0),
 ]
@@ -125,7 +133,7 @@ EFFECT_NAMES = {
     "appS": "Scrap appear", "qtyS": "Scrap quantity", "flatS": "Flat Scrap", "luckS": "Lucky Scrap",
     "multS": "Scrap multiply",
     "appT": "Thread appear", "qtyT": "Thread quantity", "flatT": "Flat Thread", "luckT": "Lucky Thread",
-    "multT": "Thread multiply",
+    "multT": "Thread multiply", "luckI": "Lucky Invitation",
 }
 ARM_ONLY = {"appear", "memQty", "flat", "luck"}
 WON_ONLY = {"rarity", "tQty", "multS", "multT"}
@@ -183,8 +191,12 @@ def describe(effs, fe=False):
     "sayı okunamadı" diye gösterilir."""
     if not effs:
         return "not read"
-    return ", ".join("Scrap / Thread (number not read)" if fe and k == "none" else f"{EFFECT_NAMES[k]} {v:g}"
-                     for k, v, *_ in effs)
+
+    def name(k, v, *src):
+        if k == "none" and src and re.search(r"invit|请柬", src[0], re.I):
+            return "Void Sea Invitation (not counted)"
+        return "Scrap / Thread (number not read)" if fe and k == "none" else f"{EFFECT_NAMES[k]} {v:g}"
+    return ", ".join(name(*e) for e in effs)
 
 
 def sig(effs):
@@ -354,14 +366,14 @@ def recommend(picked, cards, s, score=None):
 # --------------------------------------------------------------------------- #
 # Ekran okuma
 # --------------------------------------------------------------------------- #
-HEAD_RX = re.compile(r"^\W*whisper\s*of\s*(armament|wonder|wealth)\W*$", re.I)   # kart başlığı tek başına durur
+HEAD_RX = re.compile(r"^\W*(?:whisper\s*of\s*(armament|wonder|wealth)|boss\s*whisper)\W*$", re.I)   # kart başlığı tek başına durur
 FLAME_RX = re.compile(r"put\s*in\s*void\s*sea|void\s*sea\s*flames|请放入虚海|虚海夜火", re.I)
 # "After defeating Pirates, a Whisper of X of Rare quality…" — seçili alev (OCR "Whisperof_Wonder" gibi okuyabilir)
-SEL_RX = re.compile(r"whisper[\W_]*of[\W_]*(arm\w*|won\w*|wealth)", re.I)
+SEL_RX = re.compile(r"whisper[\W_]*of[\W_]*(arm\w*|won\w*|wealth)|(boss)[\W_]*whisper", re.I)
 SIDE_OF = {"armament": "arm", "wonder": "won", "wealth": "wea"}
 OWNED_RX = re.compile(r"(\d)\s*/\s*6\s*$")   # "4 / 6" ("14 / 6" okunsa da son rakam)
-# Çince: kart başlıkları 军械秘语 (Armament) / 奇珍秘语 (Wonder) / 财富秘语 (Wealth) / 首领秘语 (Boss: İngilizce
-# istemcide henüz yok; ödülü 虚海请柬, kırmızıya katkısı yok). Alev yazısı: "击败虚海之子后，可选的封印秘语必定
+# Çince: kart başlıkları 军械秘语 (Armament) / 奇珍秘语 (Wonder) / 财富秘语 (Wealth) / 首领秘语 (Boss: İngilizcede
+# "Boss Whisper", #9; ödülü 虚海请柬 / Void Sea Invitation, kırmızıya katkısı yok). Alev yazısı: "击败虚海之子后，可选的封印秘语必定
 # 出现一个 奇珍秘语，且品质至少为 稀有" (mavi alevde kalite kısmı yok). tlidb.com/cn/Void_Sea_Flame'deki
 # diğer biçimler: "…中至少有2个为 X秘语", "…中至少有一个优质的 X秘语", "击败虚海之子后，X秘语的品质至少为 魔法",
 # "…且品质为传奇". Kaliteler: 普通 < 魔法 < 稀有 < 传奇 (İngilizcede Normal < Magic < Rare < Epic).
@@ -376,7 +388,7 @@ def head_side(text):
     """Kart başlığı satırıysa türü ("arm"/"won"/"wea"/"boss"), değilse None."""
     m = HEAD_RX.search(text)
     if m:
-        return SIDE_OF[m.group(1).lower()]
+        return SIDE_OF[m.group(1).lower()] if m.group(1) else "boss"
     s = squash_cn(text)
     m = CN_HEAD_RX.search(s)
     if m:
@@ -530,6 +542,8 @@ def _side_of_word(word):
     if word in CN_SIDE:
         return CN_SIDE[word]
     w = word.lower()
+    if w == "boss":
+        return "boss"
     return "arm" if w.startswith("arm") else "won" if w.startswith("won") else "wea"
 
 
@@ -549,7 +563,7 @@ def read_selected_tier(lines, width):
     if CN_SEL_RX.search(cn):                 # Çince mavi alev: tür garanti, kalite yazmıyor
         return 0
     # mavi alev: "a Whisper of Armament is guaranteed…" — kalite yazmaz, sadece tür garanti
-    if re.search(r"whisper[\W_]*of[\W_]*\w+[\W_]*is[\W_]*guarant", main, re.I):
+    if re.search(r"(?:whisper[\W_]*of[\W_]*\w+|boss[\W_]*whisper)[\W_]*is[\W_]*guarant", main, re.I):
         return 0
     return None
 
@@ -560,7 +574,7 @@ def read_selected_flame(img, lines):
     main = " ".join(t for t, x, y in lines if x < img.width * 0.80)
     m = SEL_RX.search(main) or CN_SEL_RX.search(squash_cn(main))
     if m:
-        return _side_of_word(m.group(1))
+        return _side_of_word(next(g for g in m.groups() if g))
     after = [(x, y) for t, x, y in lines if re.search(r"defeating\s*pirates", t, re.I) or "击败虚海" in squash_cn(t)]
     if not after:
         return None
@@ -574,7 +588,7 @@ def read_selected_flame(img, lines):
     except ImportError:
         txt = " ".join(t for t, *_ in _ocr_tesseract(crop))
     m = SEL_RX.search(txt) or CN_SEL_RX.search(squash_cn(txt))
-    return _side_of_word(m.group(1)) if m else None
+    return _side_of_word(next(g for g in m.groups() if g)) if m else None
 
 
 NEED_RX = re.compile(r"need\s*(\d)\s*more\b.*whisper", re.I)   # "Sea\ Whisper" gibi bozuk okunabiliyor
@@ -613,6 +627,8 @@ def _side_of_heading(text):
         return "won"
     if re.search(r"ealt|weal|alth", t):
         return "wea"
+    if "boss" in t:
+        return "boss"
     return None
 
 
@@ -625,7 +641,7 @@ def _fill_numbers(text, nums):
     # sayı sanılırsa değer 0 çıkıyordu
     text = re.sub(r"(?<![\d.%])(?:0{1,2}|y?o)(?=\s*chance\b)", "%", text, flags=re.I)
     out, last = [], 0
-    for m in re.finditer(r"%|additional\s*(?:hero|memory)|[枚个]\s*(?:英雄|追忆|虚海)", text, re.I):
+    for m in re.finditer(r"%|additional\s*(?:hero|memory|void)|[枚个张]\s*(?:英雄|追忆|虚海)", text, re.I):
         before = text[:m.start()].rstrip()
         out.append(text[last:m.start()])
         if nums and not (before and (before[-1].isdigit() or before[-1] == "%")):
@@ -646,7 +662,7 @@ def _fill_numbers(text, nums):
 def _tier_values():
     """Her etkinin olabilecek değerleri: alev havuzlarındaki Normal / Magic / Rare / Epic kademeleri (tlidb)."""
     out = {}
-    for pool in (FLAME_POOL, FE_FLAME_POOL):
+    for pool in (FLAME_POOL, FE_FLAME_POOL, {"boss": FE_BOSS_POOL}):
         for side in pool.values():
             for k, vals in side:
                 if k != "none":
@@ -713,6 +729,10 @@ def _tier_fill(text, tier):
     """Sayısı okunamayan kart: türü metinden, kalitesi renkten (card_tier) belli; değer o kademenin tlidb değeri.
     Metne uyan tek bir etki çıkarsa o, yoksa None."""
     found = {}
+    for k, vals in FE_BOSS_POOL:         # Boss: yazıda "şans" ve "1 adet" iki ayrı sayı
+        got = parse_effects(_fill_numbers(text, [f"{vals[tier] * 100:g}", "1"]))
+        if got and all(kk == k for kk, *_ in got):
+            found.setdefault((k, round(vals[tier], 2)), got)
     for pool in (FLAME_POOL, FE_FLAME_POOL):
         for side in pool.values():
             for k, vals in side:
@@ -849,7 +869,8 @@ def _mask_numbers(wm, np, Image, f):
 # ("rnrmory", "r.lemory", "Memo", "*raps", "Sfraps", "c,Kance", "dropp&d"): bozuk kelime en yakın kelimeye çevrilir.
 CARD_WORDS = ("memory", "memorys", "memories", "scrap", "scraps", "thread", "threads", "dropped", "drop", "drops",
               "chance", "additional", "multiplied", "treasure", "treasures", "void", "sea", "hero", "appear",
-              "quantity", "rarity", "replicated", "doubled", "base", "time", "times", "from", "for", "the", "with")
+              "quantity", "rarity", "replicated", "doubled", "base", "time", "times", "from", "for", "the", "with",
+              "invitation", "invitations")
 
 
 def _fix_words(text):
@@ -922,7 +943,7 @@ def read_cards_color(img, lines):
                 return 0
             if all(k == "none" for k, *_ in es):
                 return 1
-            weak = any(k in ("luck", "luckS", "luckT") and not re.search(r"\d\s*%", src) for k, _v, src in es)
+            weak = any(k in ("luck", "luckS", "luckT", "luckI") and not re.search(r"\d\s*%", src) for k, _v, src in es)
             # 4: değerler tlidb kademe değerlerinden biri (yanlış okunmuş sayı kademeye uymaz)
             return 2 if weak else 4 if tier_ok(es) else 3
         more = []
@@ -931,7 +952,7 @@ def read_cards_color(img, lines):
         for src, s in ((lambda: crop, 2 * f), (lambda: crop, 3 * f), (gray, 2 * f)):
             im = src()
             col = [t for t, *_ in _reading_order(_ocr_any(im.resize((int(im.width * s), int(im.height * s)))))]
-            head = next((t for t in col if (re.search(r"of", t, re.I) or "秘语" in squash_cn(t))
+            head = next((t for t in col if (re.search(r"of|boss", t, re.I) or "秘语" in squash_cn(t))
                          and _side_of_heading(t)), "") or head
             body = [t for t in col if t != head]
             if CJK_RX.search(" ".join(body)):
@@ -975,6 +996,8 @@ def read_cards_color(img, lines):
             if got:
                 effs = got
         side = _side_of_heading(head)
+        if side is None and effs and re.search(r"invit", effs[0][2], re.I):
+            side = "boss"
         if side is None and effs:
             k = effs[0][0]
             if k in ARM_ONLY:
@@ -1024,7 +1047,12 @@ def analyze(img):
             cols = read_flame_colors(img)
         except Exception:
             cols = {}
-        res["tiers"] = flame_tiers(cols, res["selected"], read_selected_tier(lines, img.width))
+        try:
+            shapes = read_flame_shapes(img)
+        except Exception:
+            shapes = {}
+        res["pair"] = flame_pair(res["selected"], shapes)
+        res["tiers"] = flame_tiers(cols, res["selected"], read_selected_tier(lines, img.width), shapes)
     return res
 
 
@@ -1059,9 +1087,16 @@ def analyze_any(img):
     return first
 
 
-def flame_pair(selected):
+def flame_pair(selected, shapes=None):
     """Ekrandaki iki alevin türleri: seçili alev Wealth ya da Armament ise ondan belli; Wonder seçiliyse
-    (ya da okunamadıysa) uygulamanın planına göre (FLAME_PAIR: kırmızı planı arm/won, FE planı wea/won)."""
+    (ya da okunamadıysa) uygulamanın planına göre (FLAME_PAIR: kırmızı planı arm/won, FE planı wea/won).
+    shapes (read_flame_shapes): yazıda sadece seçili alev geçer. Wealth alevinin altı çatallı, Wonder ve Boss sivri.
+    FE planında Wonder seçiliyken iki alev de sivriyse karşıdaki Boss'tur; Boss seçiliyken çatallı olan Wealth'tir."""
+    vals = list((shapes or {}).values())
+    if selected == "boss":
+        return ("boss", "wea") if "notch" in vals else ("boss", "won")
+    if selected == "won" and FLAME_PAIR[0] == "wea" and vals.count("point") == 2:
+        return ("boss", "won")
     if selected == "wea":
         return ("wea", "won")
     if selected == "arm":
@@ -1072,15 +1107,13 @@ def flame_pair(selected):
 FLAME_PAIR = ("arm", "won")     # uygulama FE planında ("wea", "won") yapar
 
 
-def flame_tiers(cols, selected, sel_tier):
+def flame_tiers(cols, selected, sel_tier, shapes=None):
     """Alevlerin garanti kademesi {tür: kademe}. Seçili alevin türü ve kademesi yazıdan; köşesi, rengi
     ortadaki daireyle eşleşen köşe. Diğer köşe diğer türdür, kademesi kendi renginden."""
     tier = lambda c: FLAME_COLOR_TIER.get(c) if c else None
     left, right, center = cols.get("left"), cols.get("right"), cols.get("center")
     out = {}
-    if selected == "boss":
-        return out          # Çince: alevlerden biri Boss (首领) fısıltısı garanti ediyor; diğer köşenin türü bilinmiyor
-    pair = flame_pair(selected)
+    pair = flame_pair(selected, shapes)
     if selected not in pair:
         # seçili alev yazıdan okunamadı: eski varsayım (sol Armament/Wealth, sağ Wonder)
         for side, c in zip(pair, (left, right)):
@@ -1160,6 +1193,47 @@ def flame_advice(picked, s, tiers=None, pool=None, score=None):
     return (a_side if a > w else w_side), out
 
 
+def read_flame_shapes(img):
+    """Üst köşelerdeki alevlerin şekli -> {"left"|"right": "notch" (Wealth: altı çatallı) | "point" (Wonder, Boss)}.
+    Ölçü: en büyük parlak renkli parçanın yükseklik / genişlik oranı (ölçekten bağımsız). Kayıtlı 9 ekranın 18 köşesinde
+    çatallı en çok 1.34, sivri en az 1.44. Arada kalan ya da bulunamayan alev yazılmaz: eski varsayım geçerli kalır."""
+    import numpy as np
+    from PIL import Image
+    W, H = img.size
+    out = {}
+    for side, dx in (("left", -0.231), ("right", 0.233)):
+        cx, cy, r = W / 2 + dx * H, 0.305 * H, 0.07 * H
+        crop = img.crop((int(cx - r), int(cy - r), int(cx + r), int(cy + r))).convert("RGB")
+        a = np.asarray(crop.resize((120, 120), Image.BICUBIC)).astype(float) / 255
+        mx, mn = a.max(2), a.min(2)
+        mask = (mx > 0.62) & ((mx - mn) / np.maximum(mx, 1e-6) > 0.3)
+        seen = np.zeros_like(mask)
+        best = []
+        for y, x in zip(*np.where(mask)):
+            if seen[y, x]:
+                continue
+            stack, part = [(y, x)], []
+            seen[y, x] = True
+            while stack:
+                p, q = stack.pop()
+                part.append((p, q))
+                for u, v in ((p + 1, q), (p - 1, q), (p, q + 1), (p, q - 1)):
+                    if 0 <= u < 120 and 0 <= v < 120 and mask[u, v] and not seen[u, v]:
+                        seen[u, v] = True
+                        stack.append((u, v))
+            if len(part) > len(best):
+                best = part
+        if len(best) < 150:
+            continue
+        ys, xs = [b[0] for b in best], [b[1] for b in best]
+        ratio = (max(ys) - min(ys) + 1) / (max(xs) - min(xs) + 1)
+        if ratio <= 1.37:
+            out[side] = "notch"
+        elif ratio >= 1.41:
+            out[side] = "point"
+    return out
+
+
 def read_flame_colors(img):
     """Üst-sol, üst-sağ alevin ve ortadaki dairenin (seçili alev) rengi ->
     {"left"|"right"|"center": "blue"|"purple"|"yellow"}. Hangi köşenin Armament, hangisinin Wonder
@@ -1198,15 +1272,29 @@ def read_flame_colors(img):
 # Rarity bu planda sayılmaz (kullanıcının kararı). Taban sayılar son koşulardan öğrenilir (seviye değiştikçe
 # değişiyor); kayıt yokken FE_DEFAULTS. Thread kalitesi (Magic/Rare/Epic) son koşularda toplananların oranıyla.
 # --------------------------------------------------------------------------- #
+# Boss Whisper (v7.1): "%X chance for 1 additional Void Sea Invitation(s)": beklenen Invitation = şans × adet.
+#   Invitation = ( kendiliğinden düşen + öğrenilen katsayı × şanslar toplamı ) × (1+treasure miktarı)
+# Wonder'ın treasure miktarı ikisini de büyütür; Scrap ×2 / Thread ×2 ve Rarity Invitation'ı etkilemez. Değer FE:
+# Invitation × net fiyat. Varsayımlar (doğrulanmadı): şanslar toplanır; düşen tür Craving (Ecstasy ve Sorrow Lord
+# savaşlarından çıkıyor, Maxroll). Bunları koşular düzeltir: v7.1'den sonra Invitation sayılıyor (kayıtta "inv": true).
+INV_IDS = ("410201", "410202", "410203")
+INV_DEFAULT = "410201"
 FE_ITEMS = {"5140": "Memory Scrap", "5142": "Memory Thread - Magic", "5143": "Memory Thread - Rare",
-            "5144": "Memory Thread - Epic"}
+            "5144": "Memory Thread - Epic", "410201": "Void Sea Invitation - Craving",
+            "410202": "Void Sea Invitation - Ecstasy", "410203": "Void Sea Invitation - Sorrow"}
 SCRAP_ID = "5140"
 THREAD_IDS = ("5142", "5143", "5144")
 THREAD_SHORT = {"5142": "M", "5143": "R", "5144": "E"}
 FE_DEFAULTS = {"scrap": 40.0, "thread": 2.0}    # fısıltısız bir koşuda taban Scrap / Thread (kayıt yokken)
 FE_BASE_RUNS = 10                                # taban sayılar bu kadar son koşudan
 FE_PRIOR_RUNS = 3      # az koşuda öğrenilen taban varsayılana çekilir (varsayılan bu kadar koşu sayılır)
-FE_KEYS = ("baseQ", "tQty", "appS", "qtyS", "flatS", "luckS", "multS", "appT", "qtyT", "flatT", "luckT", "multT")
+FE_KEYS = ("baseQ", "tQty", "appS", "qtyS", "flatS", "luckS", "multS", "appT", "qtyT", "flatT", "luckT", "multT",
+           "luckI")
+FE_INV_PRIOR = 3.0     # öğrenme: yazılı değerin ağırlığı (bu kadar beklenen Invitation'lık koşu kadar)
+FE_INV_BASE_RUNS = 5   # Boss'suz koşularda kendiliğinden düşme oranı 0'a bu kadar koşu ağırlığında çekilir
+# Boss kademeleri: Magic / Rare / Epic oyuncunun ekranlarından (#9: mavi %10, mor %20, turuncu %40);
+# tlidb'de sayı yok. Normal görülmedi, tahmin.
+FE_BOSS_POOL = [("luckI", (0.05, 0.1, 0.2, 0.4))]
 FE_FLAME_POOL = {   # kademe değerleri: Normal / Magic / Rare / Epic (tlidb Whisper_of_Wealth / _of_Wonder)
     "wea": [("baseQ", (9, 14, 18, 36)),
             ("appS", (14, 21, 28, 56)), ("qtyS", (35, 53, 70, 140)), ("flatS", (10, 15, 19, 39)),
@@ -1267,7 +1355,28 @@ def fe_expect(effects, s):
         else:
             pre, add, post = _fe_factors(t, suf)
             out[x] = (s["base"][x] * pre + add) * post
+    inv = s.get("inv") or {}
+    out["invite"] = (inv.get("b", 0.0) + inv.get("c", 1.0) * t["luckI"]) * (1 + t["tQty"] / 100)
     return out
+
+
+def fe_inv_fit(runs):
+    """Invitation'ın koşulardan öğrenilmesi. Sadece Invitation'ın sayıldığı koşular ("inv"): eskilerde hiç
+    sayılmadığı için sıfır düşmüş gibi okunamaz. -> {"b": Boss'suz koşu başına, "c": yazılı değerin kaç katı,
+    "runs": sayılan koşu, "boss_runs": Boss'lu koşu, "got": Boss'lu koşularda düşen}"""
+    rows = []
+    for r in fe_runs(runs):
+        if r.get("inv"):
+            t = fe_totals(run_whispers(r["effects"]))
+            rows.append((t["luckI"], 1 + t["tQty"] / 100, sum(r["picks"].get(c, 0) for c in INV_IDS)))
+    plain = [x for x in rows if x[0] <= 0]
+    boss = [x for x in rows if x[0] > 0]
+    b = sum(x[2] for x in plain) / (sum(x[1] for x in plain) + FE_INV_BASE_RUNS)
+    got = sum(x[2] for x in boss)
+    extra = got - sum(b * x[1] for x in boss)
+    written = sum(x[0] * x[1] for x in boss)
+    c = (extra + FE_INV_PRIOR) / (written + FE_INV_PRIOR)
+    return {"b": b, "c": max(0.0, min(3.0, c)), "runs": len(rows), "boss_runs": len(boss), "got": got}
 
 
 def _ppois(X, y, lam, np, prior=None, lams=None):
@@ -1360,7 +1469,7 @@ def fe_typical(runs):
         for k, v in run_whispers(r["effects"]):
             seen.setdefault(k, []).append(v)
     out = {}
-    for side in FE_FLAME_POOL.values():
+    for side in (*FE_FLAME_POOL.values(), FE_BOSS_POOL):
         for k, vals in side:
             out[k] = sorted(seen[k])[len(seen[k]) // 2] if seen.get(k) else vals[2]
     return out
@@ -1368,7 +1477,7 @@ def fe_typical(runs):
 
 def fe_score(effects, s):
     e = fe_expect(effects, s)
-    return e["scrap"] * s["unit"]["scrap"] + e["thread"] * s["unit"]["thread"]
+    return e["scrap"] * s["unit"]["scrap"] + e["thread"] * s["unit"]["thread"] + e["invite"] * s["unit"].get("invite", 0.0)
 
 
 def is_fe_run(r):
@@ -1426,8 +1535,14 @@ def fe_model(runs, prices, cache=True):
     missing = [FE_ITEMS[c] for c in [SCRAP_ID] + [c for c, n in mix.items() if n] if not prices.get(c)]
     thread_v = sum(n * prices[c] for c, n in priced.items()) / sum(priced.values()) if priced else 0.0
     total = sum(mix.values())
-    out = {"base": base, "unit": {"scrap": prices.get(SCRAP_ID) or 0.0, "thread": thread_v},
-           "n_base": len(recent), "mix": {c: n / total for c, n in mix.items() if n}, "missing": missing}
+    # Invitation: düşenlerin türüne göre (henüz düşmediyse Craving); fiyatı olmayan tür sayılmaz
+    inv_mix = {c: sum(r["picks"].get(c, 0) for r in fe_runs(runs)) for c in INV_IDS}
+    inv_priced = {c: n for c, n in inv_mix.items() if n and prices.get(c)}
+    inv_v = (sum(n * prices[c] for c, n in inv_priced.items()) / sum(inv_priced.values()) if inv_priced
+             else prices.get(INV_DEFAULT) or 0.0)
+    out = {"base": base, "unit": {"scrap": prices.get(SCRAP_ID) or 0.0, "thread": thread_v, "invite": inv_v},
+           "n_base": len(recent), "mix": {c: n / total for c, n in mix.items() if n}, "missing": missing,
+           "inv": fe_inv_fit(runs)}
     fit = fe_fit(runs, base)
     out["fit_info"] = fit
     if fit["active"]:
@@ -1465,7 +1580,7 @@ def fe_whisper_stats(runs, prices, bootstrap=True):
     done = [r for r in fe_runs(runs) if run_whispers(r["effects"])]
     s = fe_model(runs, prices)
     rows = []
-    for k in ("appS", "qtyS", "flatS", "luckS", "multS", "appT", "qtyT", "flatT", "luckT", "multT",
+    for k in ("appS", "qtyS", "flatS", "luckS", "multS", "appT", "qtyT", "flatT", "luckT", "multT", "luckI",
               "baseQ", "tQty", "rarity"):
         vals, w, wo = [], [], []
         for r in done:
@@ -1519,10 +1634,13 @@ def fe_combo_stats(runs, prices):
                   key=lambda c: -c[2])
 
 
-def fe_flame_advice(picked, s, tiers=None):
-    """FE planında Wealth mi Wonder mı: o kalitedeki fısıltıların ortalama FE katkısı.
+def fe_flame_advice(picked, s, tiers=None, pair=None):
+    """FE planında alevler (ekrandaki ikisi: Wealth / Boss / Wonder): o kalitedeki fısıltıların ortalama FE katkısı.
     -> (en iyi tür | "tie" | None, {tür: (ortalama FE artışı, yüzde)})"""
-    return flame_advice(picked, s, tiers, pool=FE_FLAME_POOL, score=fe_score)
+    pool = FE_FLAME_POOL
+    if pair and "boss" in pair:
+        pool = {side: FE_BOSS_POOL if side == "boss" else FE_FLAME_POOL[side] for side in pair}
+    return flame_advice(picked, s, tiers, pool=pool, score=fe_score)
 
 
 def fe_change(before, effs, s):
@@ -1532,6 +1650,8 @@ def fe_change(before, effs, s):
         parts.append(f"Scrap {e0['scrap']:.0f}→{e1['scrap']:.0f}")
     if e1["thread"] - e0["thread"] > 0.005:
         parts.append(f"Thread {e0['thread']:.1f}→{e1['thread']:.1f}")
+    if e1["invite"] - e0["invite"] > 0.005:
+        parts.append(f"Invitation {e0['invite']:.2f}→{e1['invite']:.2f}")
     return ", ".join(parts) or "no effect on Scrap / Thread"
 
 
@@ -1561,47 +1681,107 @@ def fe_look_on(s, left):
     return left > 0 and len(s.get("screens") or ()) >= FE_LOOK_MIN_SCREENS
 
 
-def fe_look(picked, cards, s, left):
-    """recommend() gibi -> (en iyi kart | "tie" | None, [(koşu sonuna kadarki artış, yüzde)]).
-    Son seçimde ya da yeterli kayıtlı ekran yoksa recommend()'in anlık kazancı."""
-    if not cards or not fe_look_on(s, left):
-        return recommend(picked, cards, s, score=fe_score)
+def _has_boss(effs):
+    return any(k == "luckI" for k, *_ in effs)
+
+
+def _boss_on(picked, cards, s):
+    """Boss yolu denensin mi: fiyatı biliniyor ve Boss bu koşuda ya da oyuncunun ekranlarında görüldü."""
+    if s["unit"].get("invite", 0.0) <= 0:
+        return False
+    return (_has_boss(picked) or any(_has_boss(c[1]) for c in cards)
+            or any(_has_boss(e) for screen in s["screens"] for e in screen))
+
+
+def _to_boss(e):
+    """Boss yolunun gelecek ekranı: kayıtlı Wealth kartı yerine aynı kalitede Boss kartı (oyuncu alevini Boss seçseydi).
+    Kalitesi anlaşılamayan Wealth kartı Rare sayılır."""
+    if not e or not all(k in WEA_ONLY for k, *_ in e):
+        return e
+    k, v = e[0][0], e[0][1]
+    vals = next((vs for kk, vs in FE_FLAME_POOL["wea"] if kk == k), ())
+    tier = next((i for i, x in enumerate(vals) if abs(x - v) < 0.051), 2)
+    return [("luckI", FE_BOSS_POOL[0][1][tier])]
+
+
+def _fe_look_calc(picked, cards, s, left):
+    """-> (en iyi kart | "tie" | None, kazançlar, yollar). yollar: {"wea": değer, "boss": değer} ya da None."""
     import random
     import zlib
     effs = [c[1] for c in cards]
     key = (repr((sig(picked), [sig(e) for e in effs], left)), len(s["screens"]), round(s["unit"]["scrap"], 6),
-           round(s["unit"]["thread"], 6), round(s["base"]["scrap"], 4), round(s["base"]["thread"], 4), bool(s.get("fit")))
+           round(s["unit"]["thread"], 6), round(s["base"]["scrap"], 4), round(s["base"]["thread"], 4), bool(s.get("fit")),
+           round(s["unit"].get("invite", 0.0), 6), tuple(sorted((s.get("inv") or {}).items())))
     if key in _FE_LOOK_CACHE:
         return _FE_LOOK_CACHE[key]
     # aynı durumda hep aynı sonuç: overlay her çizimde soruyor, öneri kendi kendine değişmesin
     rng = random.Random(zlib.crc32(key[0].encode("utf-8")))
     futures = [[rng.choice(s["screens"]) for _ in range(left)] for _ in range(FE_LOOK_K)]
+    # İki yol: gelecek ekranlar kayıtlı hâliyle (Wealth + Wonder) ya da Wealth kartları Boss'a çevrilmiş (Boss + Wonder).
+    # Kartın değeri, onu alınca hangi yol iyiyse onun koşu sonu FE'si: seçilenler ve kalan hak kararı değiştirir.
+    lanes = {"wea": futures}
+    if _boss_on(picked, cards, s):
+        lanes["boss"] = [[[_to_boss(e) for e in screen] for screen in fut] for fut in futures]
 
-    def final(start):
+    def final(start, fs):
         total = 0.0
-        for fut in futures:
+        for fut in fs:
             q = start
             for screen in fut:
                 q = q + max(screen, key=lambda e: fe_score(q + e, s))
             total += fe_score(q, s)
-        return total / len(futures)
-    base = final(picked)
+        return total / len(fs)
+    base = max(final(picked, fs) for fs in lanes.values())
+    vals = {name: [final(picked + e, fs) for e in effs] for name, fs in lanes.items()}
     gains = []
-    for e in effs:
-        g = final(picked + e) - base if any(k in FE_KEYS for k, *_ in e) else 0.0
+    for i, e in enumerate(effs):
+        g = max(v[i] for v in vals.values()) - base if any(k in FE_KEYS for k, *_ in e) else 0.0
         gains.append((g, g / base * 100 if base > 0 else 0.0))
     order = sorted(range(len(gains)), key=lambda i: gains[i][0], reverse=True)
     top = gains[order[0]][0]
+    paths = {name: max(v) for name, v in vals.items()} if "boss" in lanes else None
     if top <= 1e-9:
-        res = None, gains
+        res = None, gains, paths
     elif len(order) > 1 and top - gains[order[1]][0] <= top * 0.03:
-        res = "tie", gains
+        res = "tie", gains, paths
     else:
-        res = order[0], gains
+        res = order[0], gains, paths
     if len(_FE_LOOK_CACHE) > 32:
         _FE_LOOK_CACHE.clear()
     _FE_LOOK_CACHE[key] = res
     return res
+
+
+def fe_look(picked, cards, s, left):
+    """recommend() gibi -> (en iyi kart | "tie" | None, [(koşu sonuna kadarki artış, yüzde)]).
+    Son seçimde ya da yeterli kayıtlı ekran yoksa recommend()'in anlık kazancı."""
+    if not cards or not fe_look_on(s, left):
+        return recommend(picked, cards, s, score=fe_score)
+    return _fe_look_calc(picked, cards, s, left)[:2]
+
+
+def fe_paths_note(picked, cards, s, left):
+    """Boss + Wonder mu Wealth + Wonder mı: bu seçimden koşu sonuna beklenen FE (Boss görülmediyse boş)."""
+    if not cards or not fe_look_on(s, left):
+        return ""
+    paths = _fe_look_calc(picked, cards, s, left)[2]
+    if not paths:
+        return ""
+    a, b = paths["boss"], paths["wea"]
+    if abs(a - b) <= max(a, b) * 0.03:
+        return f"Plan: Boss + Wonder and Wealth + Wonder are about equal (about {a:.1f} FE by the end of the run)."
+    won, lost = ("Boss", "Wealth") if a > b else ("Wealth", "Boss")
+    return (f"Plan: {won} + Wonder, about {max(a, b):.1f} FE by the end of the run "
+            f"({lost} + Wonder about {min(a, b):.1f} FE).")
+
+
+def fe_inv_note(s):
+    """Boss / Invitation hesabının dayanağı: öğrenilen oran ya da yazılı değer."""
+    inv = s.get("inv") or {}
+    if not inv.get("boss_runs"):
+        return "Boss value is an estimate: chance × Invitation price. It learns as your runs count Invitations."
+    return (f"From your {inv['boss_runs']} Boss runs: {inv['got']} Invitation(s), "
+            f"×{inv['c']:.2f} of the written chance.")
 
 
 def fe_progress(count, s):
@@ -1674,9 +1854,10 @@ def fe_learn_note(cards, best, labels, counts, n):
 def fe_reason_flame(picked, out, best, tiers=None):
     if best is None:
         return "Why: neither flame adds FE."
-    txt = (f"Why: on average a {flame_label('wea', tiers)} whisper adds {out['wea'][0]:+.1f} FE, "
-           f"a {flame_label('won', tiers)} whisper {out['won'][0]:+.1f} FE "
-           f"(Wonder multiplies what you already have; its Rarity kind counts as 0).")
+    a, b = list(out)
+    txt = (f"Why: on average a {flame_label(a, tiers)} whisper adds {out[a][0]:+.1f} FE, "
+           f"a {flame_label(b, tiers)} whisper {out[b][0]:+.1f} FE"
+           + (" (Wonder multiplies what you already have; its Rarity kind counts as 0)." if "won" in out else "."))
     if best == "tie":
         txt += " Their averages are almost the same."
     return txt
@@ -1905,7 +2086,7 @@ SHORT_NAMES = {"appear": "Appear", "memQty": "Mem qty", "flat": "Flat", "luck": 
                "tQty": "Treasure", "rarity": "Rarity", "rep": "Replication", "none": "None",
                "appS": "Scrap app.", "qtyS": "Scrap qty", "flatS": "Scrap flat", "luckS": "Scrap lucky",
                "multS": "Scrap ×", "appT": "Thread app.", "qtyT": "Thread qty", "flatT": "Thread flat",
-               "luckT": "Thread lucky", "multT": "Thread ×"}
+               "luckT": "Thread lucky", "multT": "Thread ×", "luckI": "Invitation"}
 COMPARE_MIN_RUNS = 5     # bir türün olduğu ve olmadığı koşulardan en az bu kadar yoksa sonuç "az veri"
 
 
@@ -2039,7 +2220,7 @@ def share_summary(runs, plan, settings, prices, version):
         for r, v in zip(frs, vals):
             grp.setdefault(_combo_name(r["effects"]), []).append(v)
         combos = sorted(((n, len(v), sum(v) / len(v)) for n, v in grp.items() if len(v) >= 2), key=lambda c: -c[2])
-        lines = [f"**Plan:** Memory materials (Wealth + Wonder) · **App:** v{version}", "",
+        lines = [f"**Plan:** Memory materials (Wealth or Boss + Wonder) · **App:** v{version}", "",
                  f"- Runs: **{len(frs)}** · FE earned: **{sum(vals):.1f}** · FE per run: **{sum(vals) / len(vals):.1f}** "
                  f"(after tax)",
                  f"- Per run: {sum(scrap) / len(frs):.0f} Memory Scrap · Threads Magic / Rare / Epic: "
@@ -2114,6 +2295,7 @@ class VoidSeaState:
         self.mode = "cards"  # "cards": 3 fısıltı kartı · "flame": Void Sea Seal alev seçimi
         self.selected = None # alev ekranında seçili alev
         self.tiers = {}      # alev ekranında alevlerin garanti en düşük kademesi {tür: kademe}
+        self.pair = None     # alev ekranındaki iki alevin türü
         self.owned_n = None  # paneldeki "n / 6" sayacı
         self.owned_seen = False  # son okumada sağdaki "Seal Whispers Owned" paneli okundu mu
         # ekrana gelen kartlar (seçilmeyenler dahil): koşu başlayınca kayda "offers" olarak yazılır.
@@ -2153,6 +2335,7 @@ class VoidSeaState:
             self.on_scan([], res["owned"], res["owned_n"])
             self.mode, self.selected = res["mode"], res["selected"]
             self.tiers = res.get("tiers") or {}
+            self.pair = res.get("pair")
             self.need = res.get("need")
             self._note_offer()
             return True
@@ -2264,7 +2447,7 @@ class VoidSeaState:
         return max(0, 5 - self.count())
 
     def fe_flame(self, s):
-        return fe_flame_advice(self._picked(), s, self.tiers)
+        return fe_flame_advice(self._picked(), s, self.tiers, self.pair)
 
     def fe_reason(self, s, labels):
         picked = self._picked()
@@ -2350,7 +2533,7 @@ class RunLog:
         """offers: Terminal'de ekrana gelen kartlar (VoidSeaState.offers); okunmadıysa yazılmaz."""
         run = {"t": time.strftime("%Y-%m-%d %H:%M"), "effects": [[k, v] for k, v, *_ in effs],
                "red": 0, "memories": 0, "tracked": False, "picks": {},
-               "plan": self.settings.get("vs_plan", "red")}
+               "plan": self.settings.get("vs_plan", "red"), "inv": True}
         if offers:
             run["offers"] = offers
         self.runs.append(run)
@@ -2358,7 +2541,7 @@ class RunLog:
         self.save()
 
     def on_pick(self, cid, n):
-        """Void Sea haritasında çantaya Memory Scrap / Thread girdi (FE planı): n adet."""
+        """Void Sea haritasında çantaya Memory Scrap / Thread / Void Sea Invitation girdi: n adet."""
         if self.active and self.runs and cid in FE_ITEMS and n > 0:
             p = self.runs[-1].setdefault("picks", {})
             p[cid] = p.get(cid, 0) + n

@@ -81,6 +81,10 @@ EXACT_ZH = {
     "No finished Memory materials runs yet.": "还没有已完成的追忆材料方案对局。",
     "No finished Red memories runs yet.": "还没有已完成的红色追忆方案对局。",
     "not tradeable": "不可交易", "Scrap / Thread (number not read)": "碎絮 / 游丝（数字未读出）",
+    "Void Sea Invitation (not counted)": "虚海请柬（未计入）",
+    "Lucky Invitation": "幸运请柬",
+    "Boss value is an estimate: chance × Invitation price. It learns as your runs count Invitations.":
+        "首领秘语的价值是估算：概率 × 请柬价格。随着记录的请柬数量增加会自动修正。",
     "Name this item": "命名此物品", "Name this item…": "命名此物品…", "Save": "保存",
     "This item is new and not in the item list yet. Type its English name as shown in game (hover it in your bag). "
     "The icon is then looked up on tlidb.": "这是新物品，物品列表中还没有它。请输入游戏中显示的英文名称（在背包中悬停查看），"
@@ -272,6 +276,13 @@ TEMPLATES_ZH = {
     "Pick {p} of 6: {n} more after this, values count them too.": "第 {p}/6 次选择：之后还有 {n} 次，数值已计入。",
     "Pick {p} of 6: {n} more after this.": "第 {p}/6 次选择：之后还有 {n} 次。",
     "Why: {a} → {c}; {g} FE by the end of the run.": "原因：{a} → {c}；到本局结束 {g} FE。",
+    "Plan: {a} + Wonder, about {x} FE by the end of the run ({b} + Wonder about {y} FE).":
+        "方案：{a} + 奇珍，到本局结束约 {x} FE（{b} + 奇珍约 {y} FE）。",
+    "Plan: Boss + Wonder and Wealth + Wonder are about equal (about {x} FE by the end of the run).":
+        "方案：首领 + 奇珍 与 财富 + 奇珍 差不多（到本局结束约 {x} FE）。",
+    "Void Sea Invitation after tax: {p} FE": "虚海请柬税后：{p} FE",
+    "From your {n} Boss runs: {g} Invitation(s), ×{c} of the written chance.":
+        "来自你的 {n} 局首领秘语：{g} 张请柬，为标注概率的 ×{c}。",
     "Why: {a} → {c}; {g} FE per run.": "原因：{a} → {c}；每局 {g} FE。",
     "{a} only {g} FE ({c}).": "{a} 只有 {g} FE（{c}）。",
     "{a} adds more right now ({x} vs {y} FE), but your next picks multiply {b} more.": "{a} 现在增加更多（{x} 对 {y} FE），但之后的选择会让 {b} 增长更多。",

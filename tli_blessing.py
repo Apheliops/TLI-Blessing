@@ -61,7 +61,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "7.0.1"
+APP_VERSION = "7.1"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -700,7 +700,8 @@ RX_PRICE = re.compile(r"\+\d+ \[([0-9.eE+-]+)\]\s*$")
 RX_CUR = re.compile(r"\+currency \[(\d+)\]")
 RX_FUNC = re.compile(r"CheckFuncDownloaded FuncId = (\d+)")
 BLESSINGS_FUNC = "2003"     # oyunun "Blessings from Gods" özelliğinin numarası
-PICK_IDS = ("5140", "5142", "5143", "5144")   # Memory Scrap, Memory Thread Magic/Rare/Epic (Void Sea FE planı)
+# Memory Scrap, Memory Thread Magic/Rare/Epic, Void Sea Invitation Craving/Ecstasy/Sorrow (Void Sea FE planı)
+PICK_IDS = ("5140", "5142", "5143", "5144", "410201", "410202", "410203")
 # Envanter: "Sort Order" sayfayı "Reset PageId=102" + bütün eşyaları yazar, ardından 4 sayfanın tam dökümü
 # (InitBagData) gelir; oyuna girişte de aynı döküm var. Sayfalar oyundaki sekmeler:
 RX_RESET = re.compile(r"ItemChange@ Reset PageId=(-?\d+)")
@@ -1507,7 +1508,7 @@ def run_gui(start_hidden=False):
     plan_bar.pack(fill="x", pady=(12, 0))
     T(tk.Label(plan_bar, bg=BG, fg=MUTED, font=(F_UI, 9)), "Plan").pack(side="left", padx=(0, 8))
     plan_lbls = {}
-    for key, txt in (("red", "Red memories · Armament + Wonder"), ("fe", "Memory materials · Wealth + Wonder")):
+    for key, txt in (("red", "Red memories · Armament + Wonder"), ("fe", "Memory materials · Wealth or Boss + Wonder")):
         lb = T(tk.Label(plan_bar, bg=SURF, fg=MUTED, font=(F_UI + " Semibold", 9), padx=12, pady=4, cursor="hand2",
                         highlightthickness=1, highlightbackground=BORDER), txt)
         lb.pack(side="left", padx=(0, 6))
@@ -3152,7 +3153,7 @@ def run_gui(start_hidden=False):
         return VS.fe_model(vs_log.runs, fe_prices())
 
     show_plan(data["settings"].get("vs_plan", "red"), save=False)
-    VS_COL = {"arm": ACC, "won": PRI, "wea": GOOD, "boss": MUTED, "?": MUTED}
+    VS_COL = {"arm": ACC, "won": PRI, "wea": GOOD, "boss": "#C792EA", "?": MUTED}
     VS_PICKED = "#c3a6ff"                    # seçilmiş fısıltılar: Armament/Wonder renklerinden ayrı, açık mor
     VS_WHY = "#ff9ad5"                       # önerinin gerekçesi: diğer renklerden ayrı, pembe
     # Void Sea Seal alevleri oyundaki renkleriyle (v6.8.2): hangi satırın hangi alev olduğu bir bakışta belli
@@ -4490,6 +4491,9 @@ def run_gui(start_hidden=False):
                  FG, 9, True)
         if s["missing"]:
             line("⚠ No price for " + ", ".join(s["missing"]) + ": search it on the Exchange once.", ACC, 8)
+        boss_here = any(c[0] == "boss" for c in vs.cards) or any(k == "luckI" for k, *_ in vs._picked())
+        if boss_here and not s["unit"].get("invite"):
+            line("⚠ No price for Void Sea Invitation - Craving: search it on the Exchange once.", ACC, 8)
         _vs_owned_warning(line)
         labels = [f"{pos[i]} {VS.SIDE_LABEL[c[0]]}" for i, c in enumerate(vs.cards)]
         learn = ""
@@ -4515,7 +4519,7 @@ def run_gui(start_hidden=False):
                 line(f"Currently selected: {VS.SIDE_LABEL[vs.selected]}" + ("" if ok else "  → change it"),
                      MUTED if ok else BAD, 9, ok is False)
             elif vs.selected == "arm":
-                line("The Armament flame is selected: the FE plan uses Wealth + Wonder.", ACC, 9)
+                line("The Armament flame is selected: the FE plan uses Wealth or Boss + Wonder.", ACC, 9)
         elif not vs.cards:
             line("Not read yet.", MUTED, 10)
         else:
@@ -4536,6 +4540,9 @@ def run_gui(start_hidden=False):
                 extra = f" (now {now[i][0]:+.1f})" if look and good else ""
                 line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}   {gains[i][0]:+.1f} FE{extra}",
                      GOOD if i == best else (FG if good else MUTED), 9)
+            paths = VS.fe_paths_note(vs._picked(), vs.cards, s, vs.fe_left())
+            if paths:
+                line(paths, FG, 9, True)
             if len(vs.picked) < 6:           # az görülen tür: seçilirse öğrenmeye yardım eder
                 learn = VS.fe_learn_note(vs.cards, best, labels, *VS.fe_learn_counts(vs_log.runs))
         if vs.mode in ("cards", "flame") and (vs.cards or vs.mode == "flame") and len(vs.picked) < 6:
@@ -4547,6 +4554,8 @@ def run_gui(start_hidden=False):
             line(why, VS_WHY, 9)
         if learn:
             line(learn, VS_WHY, 9)
+        if boss_here and s["unit"].get("invite"):
+            line(VS.fe_inv_note(s), MUTED, 8)
         if s.get("fit"):                     # koşulardan öğrenilen etkiler (yazılı değerden farklıysa)
             line(VS.describe_fe_learned(s["fit"]), MUTED, 8)
         # kayıt / taban / fiyat bilgisi en altta (öneri ve gerekçesi önce görünsün)
@@ -4560,6 +4569,8 @@ def run_gui(start_hidden=False):
         mix = " / ".join(f"{VS.THREAD_SHORT[c]} {r * 100:.0f}%" for c, r in s["mix"].items())
         line(f"Price after tax: Scrap {s['unit']['scrap']:.3f} FE · Thread {s['unit']['thread']:.3f} FE ({mix})",
              MUTED, 8)
+        if boss_here and s["unit"].get("invite"):
+            line(f"Void Sea Invitation after tax: {s['unit']['invite']:.1f} FE", MUTED, 8)
 
     VS_PLAN_NAME = {"red": "Red memories", "fe": "Memory materials"}
 
@@ -4574,7 +4585,7 @@ def run_gui(start_hidden=False):
 
         def choose(_e=None):
             items = []
-            for k, sub in (("red", "Armament + Wonder"), ("fe", "Wealth + Wonder")):
+            for k, sub in (("red", "Armament + Wonder"), ("fe", "Wealth or Boss + Wonder")):
                 items.append(("item", f"{VS_PLAN_NAME[k]} · {sub}", "\uE73E" if k == key else " ",
                               lambda k=k: show_plan(k)))
             dark_menu(items, chip.winfo_rootx(), chip.winfo_rooty() + chip.winfo_height() + 2, width=270, focus=False,
