@@ -1409,6 +1409,7 @@ def fe_model(runs, prices, cache=True):
         if _FE_CACHE.get("key") == key:
             return _FE_CACHE["val"]
         val = fe_model(runs, prices, cache=False)
+        val["screens"] = fe_screens(runs)      # kalan seçimler hesabı için gerçek kart üçlüleri (fe_look)
         _FE_CACHE.update(key=key, val=val)
         return val
     recent = fe_runs(runs)[-FE_BASE_RUNS:]
@@ -1538,7 +1539,85 @@ def fe_change(before, effs, s):
     return ", ".join(parts) or "no effect on Scrap / Thread"
 
 
-def fe_reason_cards(picked, cards, best, gains, labels, s):
+# --------------------------------------------------------------------------- #
+# Kalan seçimler (v7.0): çarpanlar birbirini büyüttüğü için erken seçilen kartın değeri sonraki seçimlerle artar.
+# Bir kartın değeri: onu alıp kalan seçimleri oynayınca koşu sonunda beklenen FE − bu seçimi hiç yapmamak.
+# Sonraki ekranlar oyuncunun kendi koşularında gördüğü gerçek kart üçlüleri (offers), her ekranda o anki en iyi
+# kart alınır; bütün kartlar aynı rastgele gelecekle karşılaştırılır. Son seçimde (5/6) gelecek yok: anlık kazanç.
+# Doğrulama (31 koşu, 182 ekran; koşular ikiye bölünüp ekranlar bir yarıdan, oyun öteki yarıdan): kararların ~%18'i
+# değişti, koşu başına +0.045 FE (+%0.21, ±0.013); öğrenilen modelde de yazılı formülde de aynı.
+# Alev önerisi BİLEREK değişmedi: "3 karttan en iyisi" aynı verilerle +%4.5 görünürken ayrı verilerle −%3.8 çıktı
+# (alev + kalite başına çok az ekran; aşırı uyum). Ekran sayısı artınca yeniden denenmeli.
+# --------------------------------------------------------------------------- #
+FE_LOOK_MIN_SCREENS = 30   # bundan az kayıtlı ekranda (yaklaşık 5 koşu) anlık kazanca bakılır
+FE_LOOK_K = 40             # kart başına denenen gelecek sayısı
+_FE_LOOK_CACHE = {}
+
+
+def fe_screens(runs):
+    """Memory materials koşularında ekrana gelmiş gerçek kart üçlüleri: [[kart etkileri], …]."""
+    return [[[(k, v) for k, v in effs] for _side, effs in o["cards"]]
+            for r in fe_runs(runs) for o in r.get("offers", [])]
+
+
+def fe_look_on(s, left):
+    """Bu adımda kalan seçimler hesaba katılıyor mu?"""
+    return left > 0 and len(s.get("screens") or ()) >= FE_LOOK_MIN_SCREENS
+
+
+def fe_look(picked, cards, s, left):
+    """recommend() gibi -> (en iyi kart | "tie" | None, [(koşu sonuna kadarki artış, yüzde)]).
+    Son seçimde ya da yeterli kayıtlı ekran yoksa recommend()'in anlık kazancı."""
+    if not cards or not fe_look_on(s, left):
+        return recommend(picked, cards, s, score=fe_score)
+    import random
+    import zlib
+    effs = [c[1] for c in cards]
+    key = (repr((sig(picked), [sig(e) for e in effs], left)), len(s["screens"]), round(s["unit"]["scrap"], 6),
+           round(s["unit"]["thread"], 6), round(s["base"]["scrap"], 4), round(s["base"]["thread"], 4), bool(s.get("fit")))
+    if key in _FE_LOOK_CACHE:
+        return _FE_LOOK_CACHE[key]
+    # aynı durumda hep aynı sonuç: overlay her çizimde soruyor, öneri kendi kendine değişmesin
+    rng = random.Random(zlib.crc32(key[0].encode("utf-8")))
+    futures = [[rng.choice(s["screens"]) for _ in range(left)] for _ in range(FE_LOOK_K)]
+
+    def final(start):
+        total = 0.0
+        for fut in futures:
+            q = start
+            for screen in fut:
+                q = q + max(screen, key=lambda e: fe_score(q + e, s))
+            total += fe_score(q, s)
+        return total / len(futures)
+    base = final(picked)
+    gains = []
+    for e in effs:
+        g = final(picked + e) - base if any(k in FE_KEYS for k, *_ in e) else 0.0
+        gains.append((g, g / base * 100 if base > 0 else 0.0))
+    order = sorted(range(len(gains)), key=lambda i: gains[i][0], reverse=True)
+    top = gains[order[0]][0]
+    if top <= 1e-9:
+        res = None, gains
+    elif len(order) > 1 and top - gains[order[1]][0] <= top * 0.03:
+        res = "tie", gains
+    else:
+        res = order[0], gains
+    if len(_FE_LOOK_CACHE) > 32:
+        _FE_LOOK_CACHE.clear()
+    _FE_LOOK_CACHE[key] = res
+    return res
+
+
+def fe_progress(count, s):
+    """Panelde kaçıncı seçimde olunduğu."""
+    pick = min(6, count + 1)
+    if pick == 6:
+        return "Last pick (6 of 6): only what it adds now counts."
+    n = 6 - pick
+    return f"Pick {pick} of 6: {n} more after this" + (", values count them too." if fe_look_on(s, n) else ".")
+
+
+def fe_reason_cards(picked, cards, best, gains, labels, s, left=0):
     if not cards:
         return ""
     if best is None:
@@ -1547,10 +1626,18 @@ def fe_reason_cards(picked, cards, best, gains, labels, s):
     if best == "tie":
         a, b = order[0], order[1]
         return f"Why: {labels[a]} ({gains[a][0]:+.1f} FE) and {labels[b]} ({gains[b][0]:+.1f} FE) are almost equal."
-    txt = f"Why: {labels[best]} → {fe_change(picked, cards[best][1], s)}; {gains[best][0]:+.1f} FE per run."
+    look = fe_look_on(s, left)
+    txt = (f"Why: {labels[best]} → {fe_change(picked, cards[best][1], s)}; {gains[best][0]:+.1f} FE "
+           f"{'by the end of the run' if look else 'per run'}.")
     # önerilmeyen kartların hepsi (v6.9.1'den önce sadece ikinci kart yazıyordu, üçüncünün sebebi görünmüyordu)
     for o in order[1:]:
         txt += f" {labels[o]} only {gains[o][0]:+.1f} FE ({fe_change(picked, cards[o][1], s)})."
+    if look:              # öneri, şu an en çok kazandıran kart değilse sebebi
+        _b, now = recommend(picked, cards, s, score=fe_score)
+        o = max(range(len(now)), key=lambda i: now[i][0])
+        if o != best and now[o][0] > now[best][0]:
+            txt += (f" {labels[o]} adds more right now ({now[o][0]:+.1f} vs {now[best][0]:+.1f} FE), "
+                    f"but your next picks multiply {labels[best]} more.")
     return txt
 
 
@@ -2170,7 +2257,15 @@ class VoidSeaState:
     def fe_advice(self, s):
         if len(self.picked) >= 6:
             return None, []
-        return recommend(self._picked(), self.cards, s, score=fe_score)
+        return fe_look(self._picked(), self.cards, s, self.fe_left())
+
+    def fe_now(self, s):
+        """Kartların şu anki (kalan seçimler sayılmadan) FE kazancı."""
+        return recommend(self._picked(), self.cards, s, score=fe_score)[1]
+
+    def fe_left(self):
+        """Bu seçimden sonra kalan seçim sayısı (5/6 okumasında 0: bu son seçim)."""
+        return max(0, 5 - self.count())
 
     def fe_flame(self, s):
         return fe_flame_advice(self._picked(), s, self.tiers)
@@ -2183,7 +2278,7 @@ class VoidSeaState:
         if self.mode != "cards" or len(self.picked) >= 6:
             return ""
         best, gains = self.fe_advice(s)
-        return fe_reason_cards(picked, self.cards, best, gains, labels, s)
+        return fe_reason_cards(picked, self.cards, best, gains, labels, s, self.fe_left())
 
 
 # --------------------------------------------------------------------------- #

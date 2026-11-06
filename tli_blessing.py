@@ -61,7 +61,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "6.9.2"
+APP_VERSION = "7.0"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -4514,13 +4514,19 @@ def run_gui(start_hidden=False):
                 line("Almost equal", FG, 12, True)
             else:
                 line("No effect on FE", MUTED, 11, True)
+            # kalan seçimler sayılıyorsa ana değer koşu sonuna kadarki, parantezde şu anki kazanç
+            look = VS.fe_look_on(s, vs.fe_left())
+            now = vs.fe_now(s) if look else None
             for i in sorted(range(n), key=lambda i: -gains[i][0]):
                 side, effs, _x = vs.cards[i]
                 good = gains[i][0] > 0
-                line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}   {gains[i][0]:+.1f} FE",
+                extra = f" (now {now[i][0]:+.1f})" if look and good else ""
+                line(f"{pos[i]}  {VS.SIDE_LABEL[side]}: {VS.describe(effs, fe=True)}   {gains[i][0]:+.1f} FE{extra}",
                      GOOD if i == best else (FG if good else MUTED), 9)
             if len(vs.picked) < 6:           # az görülen tür: seçilirse öğrenmeye yardım eder
                 learn = VS.fe_learn_note(vs.cards, best, labels, *VS.fe_learn_counts(vs_log.runs))
+        if vs.mode in ("cards", "flame") and (vs.cards or vs.mode == "flame") and len(vs.picked) < 6:
+            line(VS.fe_progress(vs.count(), s), FG if vs.fe_left() == 0 else MUTED, 9, vs.fe_left() == 0)
         if vs.picked:
             line("Advice based on these picks: " + "; ".join(VS.describe(e, fe=True) for _, e in vs.picked), VS_PICKED, 9)
         why = vs.fe_reason(s, labels)
