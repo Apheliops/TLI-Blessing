@@ -491,12 +491,8 @@ def read_screen(lines, width):
             texts[i].append(t)
     cards = [(h[0], parse_effects(" ".join(tx)), h[1]) for h, tx in zip(heads, texts)]
 
-    if not heads:  # başlık okunamadıysa etkileri türünden ayır
-        for e in parse_effects(" ".join(t for t, *_ in main)):
-            side = "arm" if e[0] in ARM_ONLY else "won" if e[0] in WON_ONLY else None
-            if side:
-                cards.append((side, [e], 0))
-
+    # Başlık yoksa kart yok. Eskiden ekrandaki etkiler türünden ayrılıp kart sayılıyordu: boss savaşında soldaki aktif
+    # etki listesi sahte kart oluyordu (başlıkta da "Void Sea Terminal" yazdığı için). Gerçek kartları read_cards_color okur.
     owned_n = None
     for t, *_ in panel:
         m = OWNED_RX.search(t)

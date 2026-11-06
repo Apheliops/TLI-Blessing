@@ -61,7 +61,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "7.0"
+APP_VERSION = "7.0.1"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -2464,7 +2464,16 @@ def run_gui(start_hidden=False):
         except (KeyError, ValueError):
             pass
         data["settings"]["overlay_font"] = OV_FONT_DEF
-    ov.geometry(data["settings"].get("overlay_geom", "360x280+60+220"))
+    OV_MIN_W, OV_MIN_H = 200, 110              # elle boyutlandırmanın alt sınırı: daha küçüğü "tam boyut" sayılmaz
+    # v7.0'a kadar küçük panelin başlık yüksekliği tam boyut diye kaydedilebiliyordu (panel bir daha büyümüyordu):
+    # böyle kayıtlı bir boyut burada onarılır
+    ov_m = re.fullmatch(r"(\d+)x(\d+)(.*)", data["settings"].get("overlay_geom", ""))
+    ov_w0, ov_h0, ov_pos0 = (int(ov_m[1]), int(ov_m[2]), ov_m[3]) if ov_m else (360, 280, "+60+220")
+    if ov_w0 < OV_MIN_W:
+        ov_w0 = 360
+    if ov_h0 < OV_MIN_H:
+        ov_h0 = 280
+    ov.geometry(f"{ov_w0}x{ov_h0}{ov_pos0}")
     ov_imgs = []                               # PhotoImage referansları (silinmesin)
 
     # Başlık: sürükleyerek taşı
@@ -2490,11 +2499,15 @@ def run_gui(start_hidden=False):
         else:
             root.withdraw()
 
-    ov_state = {"collapsed": False, "full_h": None}
+    ov_state = {"collapsed": False, "full_h": ov_h0}
 
     def toggle_collapse():
         if not ov_state["collapsed"]:
-            ov_state["full_h"] = ov.winfo_height()
+            # Yeni boyut hemen uygulanmaz: panel gizliyken görünene kadar, uygulama meşgulken boşta kalana kadar
+            # bekler. O arada burası hâlâ eski küçük yüksekliği okur; onu tam boyut diye almak paneli kilitliyordu.
+            h = ov.winfo_height()
+            if h >= OV_MIN_H:
+                ov_state["full_h"] = h
             active_body().pack_forget()
             ov_tabs.pack_forget()
             ov_upd.pack_forget()
@@ -2504,7 +2517,7 @@ def run_gui(start_hidden=False):
             btn_min.config(text="+")
         else:
             layout_overlay()
-            ov.geometry(f"{ov.winfo_width()}x{ov_state['full_h'] or 280}")
+            ov.geometry(f"{ov.winfo_width()}x{ov_state['full_h']}")
             ov_state["collapsed"] = False
             btn_min.config(text="–")
 
@@ -2754,8 +2767,8 @@ def run_gui(start_hidden=False):
         rs.update(x=e.x_root, y=e.y_root, w=ov.winfo_width(), h=ov.winfo_height())
 
     def rs_move(e):
-        w = max(200, rs["w"] + e.x_root - rs["x"])
-        h = max(110, rs["h"] + e.y_root - rs["y"])
+        w = max(OV_MIN_W, rs["w"] + e.x_root - rs["x"])
+        h = max(OV_MIN_H, rs["h"] + e.y_root - rs["y"])
         ov.geometry(f"{w}x{h}")
 
     ov_grip.bind("<ButtonPress-1>", rs_start)
@@ -2764,11 +2777,11 @@ def run_gui(start_hidden=False):
 
     def save_ov_geom():
         try:
-            g = ov.geometry()
-            if ov_state["collapsed"] and ov_state["full_h"]:      # kısıkken tam boyutu kaydet
-                size, _, pos = g.partition("+")
-                g = f"{size.split('x')[0]}x{ov_state['full_h']}+{pos}"
-            data["settings"]["overlay_geom"] = g
+            size, _, pos = ov.geometry().partition("+")
+            w, h = size.split("x")
+            if ov_state["collapsed"] or int(h) < OV_MIN_H:        # kısıkken ya da boyut henüz uygulanmadıysa tam boyutu kaydet
+                h = ov_state["full_h"]
+            data["settings"]["overlay_geom"] = f"{w}x{h}+{pos}"
             save_data(data)
         except Exception:
             pass
