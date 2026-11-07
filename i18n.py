@@ -283,6 +283,11 @@ TEMPLATES_ZH = {
     "Why: {a} → {c}; {g} FE by the end of the run.": "原因：{a} → {c}；到本局结束 {g} FE。",
     "Plan: {a} + Wonder, about {x} FE by the end of the run ({b} + Wonder about {y} FE).":
         "方案：{a} + 奇珍，到本局结束约 {x} FE（{b} + 奇珍约 {y} FE）。",
+    "Expected: {x} FE (usually {a}–{b}) with {n}/6 picks": "预计：{x} FE（通常 {a}–{b}），已选 {n}/6",
+    "So far {x} of about {y} FE (usually {a}–{b})": "目前 {x} / 约 {y} FE（通常 {a}–{b}）",
+    "Expected {x} FE, got {y} FE ({d})": "预计 {x} FE，实际 {y} FE（{d}）",
+    "Estimate vs actual, last {n} runs: off by {x} FE on average, actual {y} FE {s}.":
+        "预计与实际（最近 {n} 局）：平均相差 {x} FE，实际{s} {y} FE。",
     "Plan: Boss + Wonder and Wealth + Wonder are about equal (about {x} FE by the end of the run).":
         "方案：首领 + 奇珍 与 财富 + 奇珍 差不多（到本局结束约 {x} FE）。",
     "Void Sea Invitation after tax: {p} FE": "虚海请柬税后：{p} FE",

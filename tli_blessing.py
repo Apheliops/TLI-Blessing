@@ -61,7 +61,7 @@ DEFAULT_CATALOG = [[FE, 1], [FE, 5], [FE, 10],
                    ["200030", 1],                               # Ultimate Ember
                    ["100200", 20], ["100200", 60]]              # Flame Sand
 CATALOG_VER = 4
-APP_VERSION = "7.2"
+APP_VERSION = "7.3"
 # Güncelleme kontrolü: GitHub'daki son Release'in sürüm adı okunur (hiçbir veri gönderilmez)
 RELEASES_API = "https://api.github.com/repos/Apheliops/TLI-Blessing/releases/latest"
 RELEASES_URL = "https://github.com/Apheliops/TLI-Blessing/releases/latest"
@@ -3218,6 +3218,9 @@ def run_gui(start_hidden=False):
             note = (f"Picked up: {p.get(VS.SCRAP_ID, 0)} Scrap\nThread: {th}"
                     + ("" if wh else "\nWhispers were not read for this run.")
                     + ("\nIn progress: the count is final when you leave the map." if fe_live(i) else ""))
+            gap = VS.fe_gap_lines(r, fe_s(), fe_prices(), fe_live(i))
+            if gap:
+                note += "\n" + "\n".join(gap)
             detail_card(f"Run {i + 1}  ·  {r['t'][5:]}", f"{VS.run_fe(r, fe_prices()):.1f} FE  ·  "
                         f"{p.get(VS.SCRAP_ID, 0)} Scrap", ACC, rows, note)
         else:
@@ -4338,11 +4341,20 @@ def run_gui(start_hidden=False):
         elif ev == "entered":
             offers = vs.offers               # Terminal'de görülen kartlar: reset silmeden önce al
             vs.reset()
-            vs_log.start(val, offers)
+            est = None
+            if fe_plan():                    # seçili fısıltılarla beklenen FE: koşu bitince gerçekle karşılaştırılır
+                try:
+                    est = VS.fe_estimate(VS.run_whispers(val), fe_s())
+                except Exception:
+                    est = None
+            vs_log.start(val, offers, est)
             vs_st["msg"] = "Entered the Terminal: " + VS.describe(val)
         elif ev == "level":
+            ended = vs_log.active
             vs_log.on_level()
             render_runs()                    # koşu bittiyse geçmiş tablosunda "now" kalksın
+            if ended:                        # tahmin ile gerçek hemen görünsün
+                render_vs()
             return                           # her bölge değişiminde paneli yeniden çizmeye gerek yok
         elif ev == "memory":
             vs_log.on_memory(val)
@@ -4385,6 +4397,8 @@ def run_gui(start_hidden=False):
             line(f"{state}  ·  {vs.count()}/6 whispers picked", scol, 9)
             if vs.mode in ("cards", "flame") and (vs.cards or vs.mode == "flame") and not vs.owned_seen:
                 line("⚠ Open the “Seal Whispers Owned” panel and press Read.", ACC, 8)
+            if fe_plan():
+                _vs_est_lines(line, fe_s(), fe_prices(), compact=True)
             _vs_finish(line, compact=True)
             return
         if fe_plan():
@@ -4479,6 +4493,21 @@ def run_gui(start_hidden=False):
             line(f"⚠ The “Seal Whispers Owned” panel on the right was not read (is it closed?). The advice {base}. "
                  "Open the panel and press “Read”.", ACC, 8)
 
+    def _vs_est_lines(line, s, prices, compact=False):
+        """Seçili fısıltılarla beklenen FE; koşu sürerken ve bitince tahmin ile gerçek."""
+        cur = vs_log.current()
+        gaps = VS.fe_gap_lines(cur, s, prices, vs_log.active) if cur else []
+        for i, txt in enumerate(gaps[:1] if compact else gaps):
+            line(txt, FG if i == 0 else MUTED, 9 if i == 0 else 8)
+        if not vs_log.active and vs.mode in ("cards", "flame", "overview") and (vs.picked or vs.cards):
+            est = VS.fe_estimate(vs._picked(), s)
+            if est:
+                line(f"{VS.fe_est_line(est)} with {len(vs.picked)}/6 picks", PRI, 9, True)
+        if not compact:
+            stats = VS.fe_est_stats(vs_log.runs, s, prices)
+            if stats:
+                line(stats, MUTED, 8)
+
     def _vs_fe_body(line, pos, n):
         """FE planı (Wealth + Wonder): toplanan Memory Scrap / Thread'in FE değerini en çok artıran seçim."""
         s = fe_s()
@@ -4487,8 +4516,10 @@ def run_gui(start_hidden=False):
         if cur is not None and "picks" in cur:
             p = cur["picks"]
             th = " ".join(f"{p[c]}{VS.THREAD_SHORT[c]}" for c in VS.THREAD_IDS if p.get(c)) or "0"
-            line(f"Last run: {p.get(VS.SCRAP_ID, 0)} Scrap · {th} Thread · {VS.run_fe(cur, prices):.1f} FE  · automatic",
+            head = "This run" if vs_log.active else "Last run"
+            line(f"{head}: {p.get(VS.SCRAP_ID, 0)} Scrap · {th} Thread · {VS.run_fe(cur, prices):.1f} FE  · automatic",
                  FG, 9, True)
+        _vs_est_lines(line, s, prices)
         if s["missing"]:
             line("⚠ No price for " + ", ".join(s["missing"]) + ": search it on the Exchange once.", ACC, 8)
         opts = vs.options(s)

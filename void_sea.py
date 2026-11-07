@@ -1659,7 +1659,102 @@ def fe_model(runs, prices, cache=True):
     out["fit_info"] = fit
     if fit["active"]:
         out["fit"] = fit
+    out["band"] = fe_band(runs, out, prices)
     return out
+
+
+# Koşu tahmini (v7.3): seçili fısıltılarla haritadan ne kadar FE çıkar; koşu başında kayda yazılır ("est"), bitince gerçekle
+# karşılaştırılır. Geçmişe dönük ölçüm (50 koşu, her biri sadece öncekilerle): ort. tahmin 18.4, gerçek 18.8 FE; ortalama
+# sapma 3.4 FE; korelasyon 0.78. Tek koşu şansa bağlı olduğu için aralık gösterilir: Scrap / Thread için son koşuların
+# gerçek / tahmin oranının %10-%90 arası, Invitation için Poisson (düşüp düşmemesi tek başına büyük fark yaratıyor).
+FE_BAND_MIN_RUNS = 8
+FE_BAND_DEFAULT = (0.7, 1.35)
+FE_BAND_WIDEN = 1.0
+FE_EST_MIN_RUNS = 3      # bu kadar kayıtlı tahmin olmadan isabet özeti yazılmaz
+
+
+def _fe_core(e, s):
+    return e["scrap"] * s["unit"]["scrap"] + e["thread"] * s["unit"]["thread"]
+
+
+def fe_band(runs, s, prices):
+    """Scrap + Thread için gerçek / tahmin oranının olağan aralığı (son 40 koşu)."""
+    rows = []
+    for r in fe_runs(runs)[-40:]:
+        eff = run_whispers(r["effects"])
+        est = _fe_core(fe_expect(eff, s), s) if eff else 0.0
+        if est > 0:
+            act = sum(n * (prices.get(c) or 0.0) for c, n in r["picks"].items() if c not in INV_IDS)
+            rows.append(act / est)
+    if len(rows) < FE_BAND_MIN_RUNS:
+        return FE_BAND_DEFAULT
+    rows.sort()
+    lo, hi = rows[int(0.1 * len(rows))], rows[min(len(rows) - 1, int(0.9 * len(rows)))]
+    mid = (lo + hi) / 2
+    return mid - (mid - lo) * FE_BAND_WIDEN, mid + (hi - mid) * FE_BAND_WIDEN
+
+
+def _pois_q(lam, q):
+    """Poisson dağılımının q yüzdeliği."""
+    if lam <= 0:
+        return 0
+    n, p = 0, math.exp(-lam)
+    total = p
+    while total < q and n < 50:
+        n += 1
+        p *= lam / n
+        total += p
+    return n
+
+
+def fe_estimate(effects, s):
+    """Bu fısıltılarla bir koşuda beklenen -> {"scrap", "thread", "invite", "fe", "lo", "hi"}; fiyat yoksa None."""
+    if s["unit"]["scrap"] <= 0:
+        return None
+    e = fe_expect(effects, s)
+    core, u = _fe_core(e, s), s["unit"].get("invite", 0.0)
+    lo, hi = s.get("band") or FE_BAND_DEFAULT
+    return {"scrap": round(e["scrap"], 1), "thread": round(e["thread"], 2), "invite": round(e["invite"], 3),
+            "fe": round(core + e["invite"] * u, 2),
+            "lo": round(core * lo + _pois_q(e["invite"], 0.1) * u, 1),
+            "hi": round(core * hi + _pois_q(e["invite"], 0.9) * u, 1)}
+
+
+def fe_est_value(est, s):
+    """Kayıtlı tahminin bugünkü fiyatlarla değeri: fiyat değişimi tahmin hatası gibi görünmesin."""
+    u = s["unit"]
+    return est["scrap"] * u["scrap"] + est["thread"] * u["thread"] + est.get("invite", 0.0) * u.get("invite", 0.0)
+
+
+def fe_est_line(est):
+    return f"Expected: {est['fe']:.1f} FE (usually {est['lo']:.0f}–{est['hi']:.0f})"
+
+
+def fe_gap_lines(r, s, prices, live=False):
+    """Kayıtlı tahmin ile gerçek: [özet, ayrıntı]; tahmin yoksa boş."""
+    est = r.get("est")
+    if not est:
+        return []
+    act, want = run_fe(r, prices), fe_est_value(est, s)
+    p = r.get("picks", {})
+    scrap, thread, inv = p.get(SCRAP_ID, 0), sum(p.get(c, 0) for c in THREAD_IDS), sum(p.get(c, 0) for c in INV_IDS)
+    if live:
+        return [f"So far {act:.1f} of about {want:.1f} FE (usually {est['lo']:.0f}–{est['hi']:.0f})"]
+    detail = f"Scrap {est['scrap']:.0f}→{scrap}, Thread {est['thread']:.1f}→{thread}"
+    if inv or est.get("invite"):
+        detail += f", Invitation {est.get('invite', 0.0):.2f}→{inv}"
+    return [f"Expected {want:.1f} FE, got {act:.1f} FE ({act - want:+.1f})", detail]
+
+
+def fe_est_stats(runs, s, prices):
+    """Bitmiş ve tahmini kayıtlı koşularda isabet özeti; az koşuda boş."""
+    gaps = [run_fe(r, prices) - fe_est_value(r["est"], s) for r in fe_runs(runs) if r.get("est")][-20:]
+    if len(gaps) < FE_EST_MIN_RUNS:
+        return ""
+    bias = sum(gaps) / len(gaps)
+    off = sum(abs(g) for g in gaps) / len(gaps)
+    side = "higher" if bias > 0 else "lower"
+    return f"Estimate vs actual, last {len(gaps)} runs: off by {off:.1f} FE on average, actual {abs(bias):.1f} FE {side}."
 
 
 FE_KIND_NAMES = {"baseQ": "Base quantity", "tQty": "Treasure quantity", "app": "appear", "qty": "quantity",
@@ -2710,23 +2805,27 @@ class RunLog:
             with open(self.csv_path, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f, delimiter=";")
                 w.writerow(["date", "red", "memories_picked_up"] + keys + ["whispers", "memory_scrap",
-                            "thread_magic", "thread_rare", "thread_epic"])
+                            "thread_magic", "thread_rare", "thread_epic", "expected_fe"])
                 for r in self.runs:
                     t = totals([tuple(e) for e in r["effects"]])
                     p = r.get("picks")              # v6.6 öncesi koşularda yok: boş bırak
                     w.writerow([r["t"], r["red"], r["memories"]] + [f"{t[k]:g}" for k in keys]
                                + [describe(run_whispers(r["effects"]))]
-                               + ([p.get(c, 0) for c in (SCRAP_ID,) + THREAD_IDS] if p is not None else [""] * 4))
+                               + ([p.get(c, 0) for c in (SCRAP_ID,) + THREAD_IDS] if p is not None else [""] * 4)
+                               + [(r.get("est") or {}).get("fe", "")])
         except OSError:
             pass
 
-    def start(self, effs, offers=None):
-        """offers: Terminal'de ekrana gelen kartlar (VoidSeaState.offers); okunmadıysa yazılmaz."""
+    def start(self, effs, offers=None, est=None):
+        """offers: Terminal'de ekrana gelen kartlar (VoidSeaState.offers); okunmadıysa yazılmaz.
+        est: bu fısıltılarla beklenen (fe_estimate), koşu bitince gerçekle karşılaştırılır."""
         run = {"t": time.strftime("%Y-%m-%d %H:%M"), "effects": [[k, v] for k, v, *_ in effs],
                "red": 0, "memories": 0, "tracked": False, "picks": {},
                "plan": self.settings.get("vs_plan", "red"), "inv": True}
         if offers:
             run["offers"] = offers
+        if est:
+            run["est"] = est
         self.runs.append(run)
         self.active = True
         self.save()
