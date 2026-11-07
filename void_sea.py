@@ -1665,11 +1665,13 @@ def fe_model(runs, prices, cache=True):
 
 # Koşu tahmini (v7.3): seçili fısıltılarla haritadan ne kadar FE çıkar; koşu başında kayda yazılır ("est"), bitince gerçekle
 # karşılaştırılır. Geçmişe dönük ölçüm (50 koşu, her biri sadece öncekilerle): ort. tahmin 18.4, gerçek 18.8 FE; ortalama
-# sapma 3.4 FE; korelasyon 0.78. Tek koşu şansa bağlı olduğu için aralık gösterilir: Scrap / Thread için son koşuların
-# gerçek / tahmin oranının %10-%90 arası, Invitation için Poisson (düşüp düşmemesi tek başına büyük fark yaratıyor).
+# sapma 3.4 FE; korelasyon 0.78. Tek koşu şansa bağlı olduğu için aralık gösterilir: Scrap ve Thread için ayrı ayrı son
+# koşuların gerçek / tahmin oranının %10-%90 arası (Thread az sayıda ve toplu düştüğü için oransal olarak çok daha oynak,
+# v7.3.1), Invitation için Poisson (düşüp düşmemesi tek başına büyük fark yaratıyor). Sapmalar hafifçe birlikte hareket ediyor
+# (Scrap - Thread korelasyonu 0.2): birleştirme, bağımsız (kare toplamı) ile tam birlikte (düz toplam) arasının ortası.
+# Ölçüm, görmediği 47 koşu: aralık içi %79; Thread payı yüksek dizilerde %73 -> %77 (tek oranlı eski hâle göre).
 FE_BAND_MIN_RUNS = 8
-FE_BAND_DEFAULT = (0.7, 1.35)
-FE_BAND_WIDEN = 1.0
+FE_BAND_DEFAULT = {"scrap": (0.7, 1.35), "thread": (0.5, 1.7)}
 FE_EST_MIN_RUNS = 3      # bu kadar kayıtlı tahmin olmadan isabet özeti yazılmaz
 
 
@@ -1678,20 +1680,25 @@ def _fe_core(e, s):
 
 
 def fe_band(runs, s, prices):
-    """Scrap + Thread için gerçek / tahmin oranının olağan aralığı (son 40 koşu)."""
-    rows = []
+    """Scrap ve Thread için gerçek / tahmin oranının olağan aralığı (son 40 koşu) -> {"scrap": (alt, üst), "thread": …}"""
+    rows = {"scrap": [], "thread": []}
     for r in fe_runs(runs)[-40:]:
         eff = run_whispers(r["effects"])
-        est = _fe_core(fe_expect(eff, s), s) if eff else 0.0
-        if est > 0:
-            act = sum(n * (prices.get(c) or 0.0) for c, n in r["picks"].items() if c not in INV_IDS)
-            rows.append(act / est)
-    if len(rows) < FE_BAND_MIN_RUNS:
-        return FE_BAND_DEFAULT
-    rows.sort()
-    lo, hi = rows[int(0.1 * len(rows))], rows[min(len(rows) - 1, int(0.9 * len(rows)))]
-    mid = (lo + hi) / 2
-    return mid - (mid - lo) * FE_BAND_WIDEN, mid + (hi - mid) * FE_BAND_WIDEN
+        if not eff:
+            continue
+        e = fe_expect(eff, s)
+        got = {"scrap": r["picks"].get(SCRAP_ID, 0), "thread": sum(r["picks"].get(c, 0) for c in THREAD_IDS)}
+        for x in rows:
+            if e[x] > 0:
+                rows[x].append(got[x] / e[x])
+    out = {}
+    for x, vals in rows.items():
+        if len(vals) < FE_BAND_MIN_RUNS:
+            out[x] = FE_BAND_DEFAULT[x]
+        else:
+            vals.sort()
+            out[x] = (vals[int(0.1 * len(vals))], vals[min(len(vals) - 1, int(0.9 * len(vals)))])
+    return out
 
 
 def _pois_q(lam, q):
@@ -1712,12 +1719,19 @@ def fe_estimate(effects, s):
     if s["unit"]["scrap"] <= 0:
         return None
     e = fe_expect(effects, s)
-    core, u = _fe_core(e, s), s["unit"].get("invite", 0.0)
-    lo, hi = s.get("band") or FE_BAND_DEFAULT
+    u = s["unit"].get("invite", 0.0)
+    band = s.get("band") or FE_BAND_DEFAULT
+    down, up = [], []        # her parçanın tahminden sapması
+    for x in ("scrap", "thread"):
+        v = e[x] * s["unit"][x]
+        down.append(v * max(0.0, 1 - band[x][0]))
+        up.append(v * max(0.0, band[x][1] - 1))
+    down.append(max(0.0, e["invite"] - _pois_q(e["invite"], 0.1)) * u)
+    up.append(max(0.0, _pois_q(e["invite"], 0.9) - e["invite"]) * u)
+    fe = _fe_core(e, s) + e["invite"] * u
+    spread = lambda vals: (sum(vals) + math.hypot(*vals)) / 2
     return {"scrap": round(e["scrap"], 1), "thread": round(e["thread"], 2), "invite": round(e["invite"], 3),
-            "fe": round(core + e["invite"] * u, 2),
-            "lo": round(core * lo + _pois_q(e["invite"], 0.1) * u, 1),
-            "hi": round(core * hi + _pois_q(e["invite"], 0.9) * u, 1)}
+            "fe": round(fe, 2), "lo": round(max(0.0, fe - spread(down)), 1), "hi": round(fe + spread(up), 1)}
 
 
 def fe_est_value(est, s):
